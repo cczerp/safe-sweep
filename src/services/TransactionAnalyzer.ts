@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { Logger } from '../utils/logger';
-import { PendingTransaction, SuspiciousTransaction, TokenTransfer } from '../types';
+import { PendingTransaction, SuspiciousTransaction } from '../types';
 
 export class TransactionAnalyzer {
   private logger: Logger;
@@ -53,7 +53,6 @@ export class TransactionAnalyzer {
 
       const [from, to, amount] = decoded.args;
       const fromAddress = from.toLowerCase();
-      const toAddress = to.toLowerCase();
 
       // Check if the 'from' address is our Safe
       if (fromAddress !== this.safeAddress) {
