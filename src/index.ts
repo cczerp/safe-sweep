@@ -22,8 +22,22 @@ class SafeSweepBot {
       `Authorized Addresses: ${this.config.authorizedAddresses.join(', ') || 'None'}`
     );
 
-    // Convert HTTP RPC to WebSocket for mempool monitoring
-    const wsUrl = this.config.rpcUrl.replace('https://', 'wss://').replace('http://', 'ws://');
+    // Validate WebSocket URL
+    let wsUrl = this.config.rpcUrl;
+    if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+      // Try to convert HTTP to WebSocket
+      if (wsUrl.startsWith('https://')) {
+        wsUrl = wsUrl.replace('https://', 'wss://');
+        this.logger.warn(`Converted HTTPS URL to WebSocket: ${wsUrl}`);
+        this.logger.warn('If this fails, please provide a proper WebSocket URL in RPC_URL');
+      } else if (wsUrl.startsWith('http://')) {
+        wsUrl = wsUrl.replace('http://', 'ws://');
+        this.logger.warn(`Converted HTTP URL to WebSocket: ${wsUrl}`);
+        this.logger.warn('If this fails, please provide a proper WebSocket URL in RPC_URL');
+      } else {
+        throw new Error('RPC_URL must be a WebSocket URL (ws:// or wss://) for mempool monitoring');
+      }
+    }
     
     this.mempoolMonitor = new MempoolMonitor(wsUrl);
     

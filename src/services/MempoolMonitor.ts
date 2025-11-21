@@ -39,8 +39,14 @@ export class MempoolMonitor {
 
         await callback(pendingTx);
       } catch (error) {
-        // Silently skip transactions that can't be fetched
-        // This is common in mempool monitoring
+        // Most errors are expected (tx replaced, rate limiting, etc.)
+        // Only log critical errors
+        if (error instanceof Error) {
+          if (error.message.includes('network') || error.message.includes('connection')) {
+            this.logger.error('Network error while fetching transaction:', error.message);
+          }
+          // Rate limiting and other transient errors are silently skipped
+        }
       }
     });
 

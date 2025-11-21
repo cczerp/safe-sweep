@@ -148,22 +148,51 @@ export class TokenSweeper {
       const signedTx = await safe.signTransaction(safeTransaction);
 
       // Calculate gas price (higher than suspicious transaction)
-      let gasPrice: bigint;
-      if (suspiciousGasPrice) {
-        gasPrice = BigInt(suspiciousGasPrice);
+      const feeData = await this.provider.getFeeData();
+      
+      // Check if we have EIP-1559 support
+      let gasOptions;
+      if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+        // Use EIP-1559 gas pricing
+        let maxFeePerGas = feeData.maxFeePerGas;
+        let maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
+        
+        if (suspiciousGasPrice) {
+          const targetGas = BigInt(suspiciousGasPrice);
+          maxFeePerGas = (targetGas * BigInt(Math.floor(this.gasMultiplier * 100))) / 100n;
+          maxPriorityFeePerGas = (maxPriorityFeePerGas * BigInt(Math.floor(this.gasMultiplier * 100))) / 100n;
+        } else {
+          maxFeePerGas = (maxFeePerGas * BigInt(Math.floor(this.gasMultiplier * 100))) / 100n;
+          maxPriorityFeePerGas = (maxPriorityFeePerGas * BigInt(Math.floor(this.gasMultiplier * 100))) / 100n;
+        }
+        
+        gasOptions = {
+          maxFeePerGas: maxFeePerGas.toString(),
+          maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
+        };
+        
+        this.logger.info(`Using EIP-1559 gas: maxFee=${ethers.formatUnits(maxFeePerGas, 'gwei')} Gwei, maxPriority=${ethers.formatUnits(maxPriorityFeePerGas, 'gwei')} Gwei`);
+      } else if (feeData.gasPrice) {
+        // Use legacy gas pricing
+        let gasPrice = feeData.gasPrice;
+        
+        if (suspiciousGasPrice) {
+          gasPrice = BigInt(suspiciousGasPrice);
+        }
+        
         gasPrice = (gasPrice * BigInt(Math.floor(this.gasMultiplier * 100))) / 100n;
+        
+        gasOptions = {
+          gasPrice: gasPrice.toString(),
+        };
+        
+        this.logger.info(`Using legacy gas price: ${ethers.formatUnits(gasPrice, 'gwei')} Gwei`);
       } else {
-        const feeData = await this.provider.getFeeData();
-        gasPrice = feeData.gasPrice || 0n;
-        gasPrice = (gasPrice * BigInt(Math.floor(this.gasMultiplier * 100))) / 100n;
+        throw new Error('Unable to determine gas price from network');
       }
 
-      this.logger.info(`Using gas price: ${ethers.formatUnits(gasPrice, 'gwei')} Gwei`);
-
-      // Execute the transaction
-      const executeTxResponse = await safe.executeTransaction(signedTx, {
-        gasPrice: gasPrice.toString(),
-      });
+      // Execute the transaction with appropriate gas settings
+      const executeTxResponse = await safe.executeTransaction(signedTx, gasOptions);
 
       this.logger.info(`Sweep transaction submitted: ${executeTxResponse.hash}`);
 
