@@ -78,7 +78,8 @@ class UltimateDefenseMonitorV2 {
       await this.mevEngine.initialize(
         this.provider,
         this.config.privateKey,
-        this.config.bloxrouteHeader
+        this.config.bloxrouteHeader,
+        this.config.alchemyApiKey
       );
 
       if (this.mevEngine.canSubmitBundles()) {
@@ -570,6 +571,7 @@ if (require.main === module) {
     quicknodeWss: process.env.QUICKNODE_WSS,
     alchemyHttp: process.env.ALCHEMY_HTTP,
     alchemyWss: process.env.ALCHEMY_WSS,
+    alchemyApiKey: process.env.ALCHEMY_API_KEY,
     infuraHttp: process.env.INFURA_HTTP,
     ankrHttp: process.env.ANKR_HTTP,
     nodiesHttp: process.env.NODIES_HTTP,

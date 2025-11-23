@@ -52,19 +52,31 @@ class MEVBundleEngine {
     );
   }
 
-  async initialize(provider, privateKey, bloxrouteHeader = null) {
+  async initialize(provider, privateKey, bloxrouteHeader = null, alchemyApiKey = null) {
     this.provider = provider;
     this.signer = new ethers.Wallet(privateKey, provider);
+    this.alchemyApiKey = alchemyApiKey;
 
     console.log("🔧 MEV Bundle Engine Configuration:");
     console.log("   - Wallet: " + this.signer.address);
 
-    // Setup BloxRoute if available
-    if (bloxrouteHeader) {
+    // Setup Alchemy bundles (PREFERRED for Polygon)
+    if (alchemyApiKey) {
+      console.log("   - Alchemy Bundles: ✅ Available (RECOMMENDED)");
+      this.alchemyBundlesAvailable = true;
+    } else {
+      console.log("   - Alchemy Bundles: ❌ Not configured");
+      this.alchemyBundlesAvailable = false;
+    }
+
+    // Setup BloxRoute as fallback
+    if (bloxrouteHeader && !alchemyApiKey) {
       console.log("   - BloxRoute: Setting up...");
       await this.setupBloxRoute(bloxrouteHeader);
+    } else if (bloxrouteHeader) {
+      console.log("   - BloxRoute: Available as fallback");
     } else {
-      console.warn("   - BloxRoute: Not configured (bundles disabled)");
+      console.log("   - BloxRoute: Not configured");
     }
 
     console.log("✅ MEV Bundle Engine ready");
@@ -259,6 +271,7 @@ class MEVBundleEngine {
    * MAIN METHOD: Create and submit bundle for guaranteed ordering
    *
    * This gives us 100% guarantee that our tx executes before attacker's
+   * Prefers Alchemy (Polygon-native) over BloxRoute
    */
   async guaranteedFrontRun(ourSignedTx, attackerTx) {
     const startTime = Date.now();
@@ -266,8 +279,8 @@ class MEVBundleEngine {
     console.log("\n🎯 GUARANTEED FRONT-RUN WITH MEV BUNDLE");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    if (!this.bloxrouteWs || this.bloxrouteWs.readyState !== WebSocket.OPEN) {
-      throw new Error("BloxRoute not available - cannot submit bundles");
+    if (!this.canSubmitBundles()) {
+      throw new Error("No bundle service available - configure Alchemy or BloxRoute");
     }
 
     try {
@@ -275,11 +288,29 @@ class MEVBundleEngine {
       const currentBlock = await this.provider.getBlockNumber();
       console.log(`Current block: ${currentBlock}`);
 
-      // Build bundle
-      const bundle = await this.buildBundle(ourSignedTx, attackerTx, currentBlock);
+      let result;
 
-      // Submit bundle
-      const result = await this.submitBundleViaBloxRoute(bundle);
+      // Try Alchemy first (preferred for Polygon)
+      if (this.alchemyBundlesAvailable) {
+        console.log("🎯 Using Alchemy Bundles (Polygon-native)");
+        try {
+          result = await this.submitBundleViaAlchemy(ourSignedTx);
+        } catch (error) {
+          console.log("⚠️ Alchemy failed, trying BloxRoute fallback...");
+          if (this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN) {
+            const bundle = await this.buildBundle(ourSignedTx, attackerTx, currentBlock);
+            result = await this.submitBundleViaBloxRoute(bundle);
+          } else {
+            throw error;
+          }
+        }
+      } else if (this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN) {
+        console.log("🎯 Using BloxRoute Bundles");
+        const bundle = await this.buildBundle(ourSignedTx, attackerTx, currentBlock);
+        result = await this.submitBundleViaBloxRoute(bundle);
+      } else {
+        throw new Error("No bundle service available");
+      }
 
       const totalTime = Date.now() - startTime;
       console.log("\n✅ MEV BUNDLE SUBMITTED SUCCESSFULLY");
@@ -367,10 +398,69 @@ class MEVBundleEngine {
   }
 
   /**
+   * Submit bundle via Alchemy (PREFERRED METHOD for Polygon)
+   */
+  async submitBundleViaAlchemy(signedTx) {
+    if (!this.alchemyApiKey) {
+      throw new Error("Alchemy API key not configured");
+    }
+
+    console.log("\n🚀 SUBMITTING BUNDLE VIA ALCHEMY");
+
+    try {
+      const axios = require("axios");
+
+      // Alchemy's sendPrivateTransaction API
+      const alchemyUrl = `https://polygon-mainnet.g.alchemy.com/v2/${this.alchemyApiKey}`;
+
+      const response = await axios.post(alchemyUrl, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_sendPrivateTransaction",
+        params: [
+          {
+            tx: signedTx,
+            maxBlockNumber: null, // Include ASAP
+            preferences: {
+              fast: true // Prioritize speed
+            }
+          }
+        ]
+      }, {
+        headers: {
+          "Content-Type": "application/json"
+        },
+        timeout: 10000
+      });
+
+      if (response.data.error) {
+        throw new Error(`Alchemy error: ${response.data.error.message}`);
+      }
+
+      console.log("   ✅ Alchemy bundle submitted successfully");
+      console.log("   📊 TX Hash:", response.data.result);
+
+      this.stats.bundlesSubmitted++;
+
+      return {
+        success: true,
+        txHash: response.data.result,
+        method: "alchemy"
+      };
+
+    } catch (error) {
+      console.error("   ❌ Alchemy bundle failed:", error.message);
+      this.stats.bundlesFailed++;
+      throw error;
+    }
+  }
+
+  /**
    * Check if bundle submission is available
    */
   canSubmitBundles() {
-    return this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN;
+    return this.alchemyBundlesAvailable ||
+           (this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN);
   }
 
   /**
