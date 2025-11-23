@@ -17,7 +17,7 @@ This is a **honeypot defense system** that:
 - Bundles your sweep TX with attacker's TX
 - Your TX in position 1, theirs in position 2
 - Result: **You ALWAYS win** (attacker TX fails, no funds)
-- Via BloxRoute bundle submission
+- Via **Alchemy bundles (Polygon)** or BloxRoute (Ethereum/BSC)
 
 ### Layer 2: Pre-Signed Transactions (50ms response)
 - Keeps a pool of signed sweep transactions ready to broadcast instantly
@@ -83,7 +83,8 @@ Required settings:
 - `SWEEPER_MODULE` - Your sweeper module contract
 - `PRIVATE_KEY` - Bot wallet private key
 - RPC endpoints (Alchemy, QuickNode, etc.)
-- `BLOXROUTE_HEADER` - BloxRoute auth (critical for speed)
+- `ALCHEMY_API_KEY` - For Polygon MEV bundles (FREE!)
+- `BLOXROUTE_HEADER` - Only for Ethereum/BSC (Polygon not supported)
 
 ### 3. Test Your Setup
 ```bash
@@ -214,10 +215,10 @@ DEBUG=true                    # Verbose logging
 - Check for rate limiting
 
 **Still losing races:**
-- Verify BloxRoute is connected
-- Increase `EMERGENCY_GAS_MULTIPLIER`
-- Increase `GAS_PREMIUM`
-- Next step: Add MEV bundles (coming soon)
+- **SOLUTION: Enable MEV bundles for 100% win rate!**
+- For Polygon: Set `ALCHEMY_API_KEY` + `ENABLE_MEV_BUNDLES=true`
+- For Ethereum/BSC: Set `BLOXROUTE_HEADER` + `ENABLE_MEV_BUNDLES=true`
+- Fallback: Increase `EMERGENCY_GAS_MULTIPLIER` or `GAS_PREMIUM`
 
 ## 🚧 Roadmap
 

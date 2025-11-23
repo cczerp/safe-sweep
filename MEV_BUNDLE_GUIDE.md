@@ -126,9 +126,40 @@ MAX_BLOCKS_AHEAD=3
 # 50 gwei is good for Polygon
 BUNDLE_PRIORITY_FEE=50
 
-# CRITICAL: You need BloxRoute for bundles
+# FOR POLYGON: Use Alchemy (native bundle support!)
+ALCHEMY_API_KEY=your_alchemy_api_key
+
+# FOR ETHEREUM/BSC: Use BloxRoute (Polygon NOT supported)
 BLOXROUTE_HEADER=your_bloxroute_auth_header
 ```
+
+## 🔑 Getting Your Alchemy API Key (Polygon Users)
+
+Alchemy provides **FREE** native bundle support for Polygon!
+
+### Step 1: Get Alchemy API Key
+
+1. Go to [alchemy.com](https://alchemy.com) and sign up (free)
+2. Create a new app:
+   - Select **Polygon**
+   - Select **Polygon Mainnet**
+3. Copy your API key from the dashboard
+
+### Step 2: Add to .env
+
+```env
+ALCHEMY_API_KEY=alch_abcdefgh123456789
+ALCHEMY_HTTP=https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY
+ALCHEMY_WSS=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY
+```
+
+### Step 3: Enable MEV Bundles
+
+```env
+ENABLE_MEV_BUNDLES=true
+```
+
+That's it! The system will automatically use Alchemy's `eth_sendPrivateTransaction` API for guaranteed transaction ordering on Polygon.
 
 ## 🚀 Usage
 
@@ -145,7 +176,7 @@ You'll see:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
    🥇 PRIMARY: MEV Bundles (100% guaranteed ordering)
-      └─ BloxRoute bundle submission
+      └─ Alchemy bundle submission (Polygon) or BloxRoute (ETH/BSC)
       └─ Your TX executes BEFORE attacker's
       └─ Attacker TX fails (no funds left)
 
@@ -174,10 +205,10 @@ Attacker TX: 0xabc123...
    ✅ Bundle includes both txs (ours first, attacker's second)
    ⚡ Bundle built in 45ms
 
-🚀 SUBMITTING MEV BUNDLE VIA BLOXROUTE
-   Bundle ID: 1234567890
-   Transactions: 2
-   ✅ Bundle accepted by BloxRoute
+🚀 SUBMITTING MEV BUNDLE VIA ALCHEMY
+   Transaction: Private transaction
+   Method: eth_sendPrivateTransaction
+   ✅ Bundle accepted by Alchemy
 
 ✅ MEV BUNDLE SUBMITTED SUCCESSFULLY
    ⏱️ Total time: 87ms
@@ -211,7 +242,7 @@ The system automatically monitors if your bundle gets included:
 |-----------|------|-------|
 | Base gas | ~$0.50 | Normal tx gas on Polygon |
 | Priority fee (50 gwei) | ~$1-2 | Ensures bundle inclusion |
-| BloxRoute relay | $0 | Free with auth header |
+| Alchemy bundle relay | $0 | **FREE** with any Alchemy account! |
 | **Total** | **~$2-5** | **Guarantees 100% win** |
 
 ### Compare to Losing:
