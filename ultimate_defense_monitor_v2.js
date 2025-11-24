@@ -175,6 +175,37 @@ class UltimateDefenseMonitorV2 {
       }
     }
 
+    // Threat Type 3: ERC20 transferFrom stealing from our Safe
+    // This is the MOST COMMON attack vector!
+    if (tx.data && tx.data.length >= 138) {
+      const functionSig = tx.data.slice(0, 10);
+
+      // transferFrom(address from, address to, uint256 amount)
+      if (functionSig === "0x23b872dd") {
+        // Extract 'from' address (first parameter, bytes 10-74)
+        const fromParam = "0x" + tx.data.slice(34, 74);
+        const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+
+        if (fromAddress.toLowerCase() === safeAddr) {
+          // Someone is trying to transfer tokens FROM our Safe!
+          return {
+            isThreat: true,
+            type: "ERC20_TRANSFERFROM_ATTACK",
+            severity: "CRITICAL",
+            asset: this.detectAssetFromData(tx.data, tx.to),
+            attackerTx: tx,
+          };
+        }
+      }
+
+      // transfer(address to, uint256 amount) - if token contract is called
+      // and Safe has approved it, this could also be a threat
+      if (functionSig === "0xa9059cbb") {
+        // This is less critical but monitor it
+        // We mainly care about transferFrom
+      }
+    }
+
     return null;
   }
 
