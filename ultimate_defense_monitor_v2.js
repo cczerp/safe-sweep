@@ -469,15 +469,24 @@ class UltimateDefenseMonitorV2 {
     console.log("\n👁️ MONITORING STARTED - Watching for threats...");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
+    // STRATEGY 1: Monitor pending transactions
+    let pendingTxCount = 0;
     this.wsProvider.on("pending", async (txHash) => {
       try {
+        pendingTxCount++;
+        if (this.config.debug && pendingTxCount % 100 === 0) {
+          console.log(`🔍 Processed ${pendingTxCount} pending transactions so far...`);
+        }
+
         const tx = await this.provider.getTransaction(txHash);
         if (!tx) return;
 
-        // Debug: Log all transactions involving our Safe
+        // Debug: Log all transactions involving our Safe or USDT contract
         if (this.config.debug) {
           const safeAddr = this.config.safeAddress.toLowerCase();
+          const usdtAddr = this.config.usdtContract?.toLowerCase();
           const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
+          const isUSDTCall = tx.to?.toLowerCase() === usdtAddr;
 
           // Also check if this is a transferFrom call mentioning our Safe
           let isTransferFromSafe = false;
@@ -489,14 +498,17 @@ class UltimateDefenseMonitorV2 {
             } catch (e) {}
           }
 
-          if (isDirectlyInvolved || isTransferFromSafe) {
-            console.log(`\n🔍 DEBUG: Pending TX involving Safe:`);
+          if (isDirectlyInvolved || isTransferFromSafe || isUSDTCall) {
+            console.log(`\n🔍 DEBUG: Pending TX involving Safe/USDT:`);
             console.log(`   Hash: ${tx.hash}`);
             console.log(`   From: ${tx.from}`);
             console.log(`   To: ${tx.to}`);
             console.log(`   Data: ${tx.data?.slice(0, 66)}...`);
             if (isTransferFromSafe) {
               console.log(`   ⚠️ This is a transferFrom targeting Safe!`);
+            }
+            if (isUSDTCall) {
+              console.log(`   📝 This is a call to USDT contract`);
             }
           }
         }
@@ -510,7 +522,12 @@ class UltimateDefenseMonitorV2 {
       }
     });
 
+    // STRATEGY 2: Aggressively scan each block for threats
+    let lastBlockScanned = 0;
     this.provider.on("block", async (blockNumber) => {
+      if (blockNumber <= lastBlockScanned) return;
+      lastBlockScanned = blockNumber;
+
       if (this.config.debug) {
         console.log(
           `📦 Block ${blockNumber} | Threats: ${this.stats.threatsDetected} | Responses: ${this.stats.responsesSent}`
@@ -527,8 +544,10 @@ class UltimateDefenseMonitorV2 {
             if (threat && !this.detectedThreats.has(tx.hash)) {
               console.log(`\n⚠️ THREAT FOUND IN BLOCK (missed in mempool!)`);
               console.log(`   TX: ${tx.hash}`);
-              console.log(`   This transaction was included too fast to front-run`);
-              console.log(`   Consider: Using MEV bundles for guaranteed ordering`);
+              console.log(`   Block: ${blockNumber}`);
+              console.log(`   Type: ${threat.type}`);
+              console.log(`   This transaction was included too fast to front-run!`);
+              console.log(`   🔍 Your WebSocket provider may not broadcast all pending txs`);
 
               // Log but don't respond (too late)
               this.detectedThreats.set(tx.hash, { timestamp: Date.now(), threat });
@@ -538,6 +557,9 @@ class UltimateDefenseMonitorV2 {
         }
       } catch (error) {
         // Block inspection is optional, don't crash
+        if (this.config.debug) {
+          console.log(`⚠️ Could not inspect block ${blockNumber}: ${error.message}`);
+        }
       }
 
       // Cleanup old threats
