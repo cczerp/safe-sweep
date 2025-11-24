@@ -474,6 +474,33 @@ class UltimateDefenseMonitorV2 {
         const tx = await this.provider.getTransaction(txHash);
         if (!tx) return;
 
+        // Debug: Log all transactions involving our Safe
+        if (this.config.debug) {
+          const safeAddr = this.config.safeAddress.toLowerCase();
+          const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
+
+          // Also check if this is a transferFrom call mentioning our Safe
+          let isTransferFromSafe = false;
+          if (tx.data && tx.data.length >= 138 && tx.data.slice(0, 10) === "0x23b872dd") {
+            try {
+              const fromParam = "0x" + tx.data.slice(34, 74);
+              const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+              isTransferFromSafe = fromAddress.toLowerCase() === safeAddr;
+            } catch (e) {}
+          }
+
+          if (isDirectlyInvolved || isTransferFromSafe) {
+            console.log(`\n🔍 DEBUG: Pending TX involving Safe:`);
+            console.log(`   Hash: ${tx.hash}`);
+            console.log(`   From: ${tx.from}`);
+            console.log(`   To: ${tx.to}`);
+            console.log(`   Data: ${tx.data?.slice(0, 66)}...`);
+            if (isTransferFromSafe) {
+              console.log(`   ⚠️ This is a transferFrom targeting Safe!`);
+            }
+          }
+        }
+
         const threat = this.detectThreat(tx);
         if (threat) {
           await this.respondToThreat(threat);
@@ -488,6 +515,29 @@ class UltimateDefenseMonitorV2 {
         console.log(
           `📦 Block ${blockNumber} | Threats: ${this.stats.threatsDetected} | Responses: ${this.stats.responsesSent}`
         );
+      }
+
+      // Inspect block transactions as backup (catch fast inclusions)
+      try {
+        const block = await this.provider.getBlockWithTransactions(blockNumber);
+        if (block && block.transactions) {
+          for (const tx of block.transactions) {
+            // Check if this transaction is a threat
+            const threat = this.detectThreat(tx);
+            if (threat && !this.detectedThreats.has(tx.hash)) {
+              console.log(`\n⚠️ THREAT FOUND IN BLOCK (missed in mempool!)`);
+              console.log(`   TX: ${tx.hash}`);
+              console.log(`   This transaction was included too fast to front-run`);
+              console.log(`   Consider: Using MEV bundles for guaranteed ordering`);
+
+              // Log but don't respond (too late)
+              this.detectedThreats.set(tx.hash, { timestamp: Date.now(), threat });
+              this.stats.threatsDetected++;
+            }
+          }
+        }
+      } catch (error) {
+        // Block inspection is optional, don't crash
       }
 
       // Cleanup old threats
