@@ -60,6 +60,12 @@ class UltimateDefenseMonitorV2 {
       console.log("🔌 Connecting to WebSocket for mempool monitoring...");
       this.wsProvider = new ethers.providers.WebSocketProvider(wsUrl);
       console.log("✅ WebSocket connected");
+
+      // Set up targeted monitoring for USDT contract transactions
+      if (this.config.usdtContract) {
+        console.log(`🎯 Setting up targeted monitoring for USDT contract: ${this.config.usdtContract}`);
+        console.log("   This filters for transactions TO the USDT contract only");
+      }
     } else {
       console.warn("⚠️ No WebSocket URL, using HTTP (slower)");
       this.wsProvider = this.provider;
@@ -471,45 +477,60 @@ class UltimateDefenseMonitorV2 {
 
     // STRATEGY 1: Monitor pending transactions
     let pendingTxCount = 0;
+    let usdtTxCount = 0;
+
     this.wsProvider.on("pending", async (txHash) => {
       try {
         pendingTxCount++;
         if (this.config.debug && pendingTxCount % 100 === 0) {
-          console.log(`🔍 Processed ${pendingTxCount} pending transactions so far...`);
+          console.log(`🔍 Processed ${pendingTxCount} total pending txs (${usdtTxCount} USDT-related)`);
         }
 
         const tx = await this.provider.getTransaction(txHash);
         if (!tx) return;
 
-        // Debug: Log all transactions involving our Safe or USDT contract
+        const safeAddr = this.config.safeAddress.toLowerCase();
+        const usdtAddr = this.config.usdtContract?.toLowerCase();
+
+        // TARGETED FILTERING: Only process transactions we care about
+        const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
+        const isUSDTCall = tx.to?.toLowerCase() === usdtAddr;
+
+        // Check if this is a transferFrom call mentioning our Safe
+        let isTransferFromSafe = false;
+        if (tx.data && tx.data.length >= 138 && tx.data.slice(0, 10) === "0x23b872dd") {
+          try {
+            const fromParam = "0x" + tx.data.slice(34, 74);
+            const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+            isTransferFromSafe = fromAddress.toLowerCase() === safeAddr;
+          } catch (e) {}
+        }
+
+        // Skip if not relevant to our Safe or USDT
+        if (!isDirectlyInvolved && !isUSDTCall && !isTransferFromSafe) {
+          return;
+        }
+
+        // Count USDT-related transactions
+        if (isUSDTCall) {
+          usdtTxCount++;
+        }
+
+        // Debug: Log all relevant transactions
         if (this.config.debug) {
-          const safeAddr = this.config.safeAddress.toLowerCase();
-          const usdtAddr = this.config.usdtContract?.toLowerCase();
-          const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
-          const isUSDTCall = tx.to?.toLowerCase() === usdtAddr;
-
-          // Also check if this is a transferFrom call mentioning our Safe
-          let isTransferFromSafe = false;
-          if (tx.data && tx.data.length >= 138 && tx.data.slice(0, 10) === "0x23b872dd") {
-            try {
-              const fromParam = "0x" + tx.data.slice(34, 74);
-              const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
-              isTransferFromSafe = fromAddress.toLowerCase() === safeAddr;
-            } catch (e) {}
+          console.log(`\n🔍 DEBUG: Pending TX (relevant to Safe/USDT):`);
+          console.log(`   Hash: ${tx.hash}`);
+          console.log(`   From: ${tx.from}`);
+          console.log(`   To: ${tx.to}`);
+          console.log(`   Data: ${tx.data?.slice(0, 66)}...`);
+          if (isTransferFromSafe) {
+            console.log(`   ⚠️ This is a transferFrom targeting Safe!`);
           }
-
-          if (isDirectlyInvolved || isTransferFromSafe || isUSDTCall) {
-            console.log(`\n🔍 DEBUG: Pending TX involving Safe/USDT:`);
-            console.log(`   Hash: ${tx.hash}`);
-            console.log(`   From: ${tx.from}`);
-            console.log(`   To: ${tx.to}`);
-            console.log(`   Data: ${tx.data?.slice(0, 66)}...`);
-            if (isTransferFromSafe) {
-              console.log(`   ⚠️ This is a transferFrom targeting Safe!`);
-            }
-            if (isUSDTCall) {
-              console.log(`   📝 This is a call to USDT contract`);
-            }
+          if (isUSDTCall) {
+            console.log(`   📝 Call to USDT contract`);
+          }
+          if (isDirectlyInvolved) {
+            console.log(`   🎯 Direct Safe transaction`);
           }
         }
 
