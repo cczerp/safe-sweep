@@ -63,11 +63,28 @@ class PreSignedTxPool {
 
     console.log(`   - Base nonce: ${this.baseNonce}`);
 
-    // Generate initial pools
-    await this.generateUSDTPool();
-    await this.generateMATICPool();
+    // Generate initial pools (skip if no tokens present)
+    try {
+      await this.generateUSDTPool();
+    } catch (error) {
+      if (error.message.includes("No tokens to sweep")) {
+        console.log("   ℹ️ No USDT in Safe yet - pool will generate when tokens detected");
+      } else {
+        console.warn(`   ⚠️ Could not generate USDT pool: ${error.message}`);
+      }
+    }
 
-    console.log("✅ Pre-signed pool ready for instant broadcast");
+    try {
+      await this.generateMATICPool();
+    } catch (error) {
+      if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC")) {
+        console.log("   ℹ️ No MATIC in Safe yet - pool will generate when tokens detected");
+      } else {
+        console.warn(`   ⚠️ Could not generate MATIC pool: ${error.message}`);
+      }
+    }
+
+    console.log("✅ Pre-signed pool initialized (ready when tokens are present)");
 
     // Start gas refresh timer
     this.startGasRefreshTimer();
