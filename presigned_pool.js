@@ -344,12 +344,35 @@ class PreSignedTxPool {
       console.log(`🔄 Nonce advanced from ${this.baseNonce} to ${currentNonce}, regenerating pools...`);
       this.baseNonce = currentNonce;
 
-      await this.generateUSDTPool();
-      await this.generateMATICPool();
+      // Regenerate USDT pool (skip if no tokens)
+      try {
+        await this.generateUSDTPool();
+      } catch (error) {
+        if (error.message.includes("No tokens to sweep")) {
+          console.log("   ℹ️ Skipping USDT pool (no tokens in Safe)");
+        } else {
+          console.warn(`   ⚠️ Could not regenerate USDT pool: ${error.message}`);
+        }
+      }
+
+      // Regenerate MATIC pool (skip if no tokens)
+      try {
+        await this.generateMATICPool();
+      } catch (error) {
+        if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC")) {
+          console.log("   ℹ️ Skipping MATIC pool (no tokens in Safe)");
+        } else {
+          console.warn(`   ⚠️ Could not regenerate MATIC pool: ${error.message}`);
+        }
+      }
 
       // Regenerate all generic token pools
       for (const [tokenAddress, _] of this.pools.generic.entries()) {
-        await this.generateTokenPool(tokenAddress);
+        try {
+          await this.generateTokenPool(tokenAddress);
+        } catch (error) {
+          console.warn(`   ⚠️ Could not regenerate pool for ${tokenAddress}: ${error.message}`);
+        }
       }
     }
   }
