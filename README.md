@@ -30,39 +30,41 @@ This is a **honeypot defense system** that:
 - Ensures your transaction gets ordered first
 
 ### Layer 4: Shotgun Multi-Path Submission
-- Broadcasts through 5+ paths simultaneously:
-  - BloxRoute private relay (fastest)
-  - Multiple RPC providers in parallel
+- Broadcasts through multiple RPC providers simultaneously:
+  - Alchemy HTTP
+  - QuickNode HTTP
+  - Infura HTTP
+  - Ankr HTTP
+  - Nodies HTTP
   - First successful submission wins
 - Maximizes probability of fast inclusion
 
 ## 📁 Project Files
 
-### Core System (V2 - MEV Edition)
+### Core System
 - **`ultimate_defense_monitor_v2.js`** - **Main system with MEV bundles (RUN THIS!)**
-- **`mev_bundle_engine.js`** - MEV bundle builder and submitter
+- **`mev_bundle_engine.js`** - MEV bundle builder and submitter (Alchemy)
 - **`ultra_fast_sweeper.js`** - Fast sweeper with pre-signed pool + shotgun
 - **`presigned_pool.js`** - Pre-signed transaction pool manager
 - **`dynamic_gas_bidder.js`** - Dynamic gas bidding engine
 
-### Core System (V1 - Legacy)
-- **`ultimate_defense_monitor.js`** - V1 without MEV bundles
-- Use V2 instead for 100% win rate!
-
-### Legacy/Standalone Tools
-- **`sweeper_bot.js`** - Original sweeper (fallback)
-- **`botcontrol.js`** - Integrated monitor (older version)
-- **`bloxroute-test.js`** - Test BloxRoute connection
-
 ### Smart Contracts
-- **`stealth_module_logic.sol`** - Stealth sweeper Safe module
-- **`vault_module.sol`** - Hidden vault for storing swept assets
+- **`DefensiveSweeper.sol`** - Safe module for emergency token sweeping
+- **`SimpleVault.sol`** - Vault contract for storing swept assets
 
-### Configuration & Testing
-- **`.env.example`** - Example environment configuration
+### Helper Scripts
 - **`test_setup.js`** - Setup verification script
+- **`test_detection.js`** - Test threat detection logic
+- **`verify_deployment.js`** - Verify contract deployments
+- **`get_bot_address.js`** - Show bot wallet address
+- **`authorize_bot.js`** - Authorize bot on sweeper contract
+
+### Documentation
+- **`.env.example`** - Example environment configuration
 - **`DEFENSE_GUIDE.md`** - Complete usage guide
 - **`MEV_BUNDLE_GUIDE.md`** - MEV bundle guide (100% win rate!)
+- **`DEPLOYMENT_GUIDE.md`** - Contract deployment guide
+- **`AUTHORIZE_BOT_GUIDE.md`** - Bot authorization guide
 
 ## 🏁 Quick Start
 
@@ -82,9 +84,8 @@ Required settings:
 - `VAULT_ADDRESS` - Your vault address
 - `SWEEPER_MODULE` - Your sweeper module contract
 - `PRIVATE_KEY` - Bot wallet private key
-- RPC endpoints (Alchemy, QuickNode, etc.)
 - `ALCHEMY_API_KEY` - For Polygon MEV bundles (FREE!)
-- `BLOXROUTE_HEADER` - Only for Ethereum/BSC (Polygon not supported)
+- RPC endpoints (Alchemy HTTP/WSS recommended)
 
 ### 3. Test Your Setup
 ```bash
