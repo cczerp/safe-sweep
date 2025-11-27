@@ -5,6 +5,13 @@ const { MEVBundleEngine } = require("./mev_bundle_engine");
 require("dotenv").config();
 
 /**
+ * Validate if URL is a proper WebSocket URL
+ */
+function isWebSocketUrl(url) {
+  return typeof url === "string" && (url.startsWith("wss://") || url.startsWith("ws://"));
+}
+
+/**
  * Ultimate Defense Monitor V2 - With MEV Bundle Support
  *
  * Four-layer defense strategy:
@@ -55,19 +62,45 @@ class UltimateDefenseMonitorV2 {
     console.log("\n📡 Connecting to network...");
     this.provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrl);
 
+    // Try WebSocket providers with validation and error handling
     const wsUrl = this.config.quicknodeWss || this.config.alchemyWss;
-    if (wsUrl) {
-      console.log("🔌 Connecting to WebSocket for mempool monitoring...");
-      this.wsProvider = new ethers.providers.WebSocketProvider(wsUrl);
-      console.log("✅ WebSocket connected");
+    if (wsUrl && isWebSocketUrl(wsUrl)) {
+      try {
+        console.log("🔌 Connecting to WebSocket for mempool monitoring...");
+        console.log(`   URL: ${wsUrl.substring(0, 30)}...`);
 
-      // Set up targeted monitoring for USDT contract transactions
-      if (this.config.usdtContract) {
-        console.log(`🎯 Setting up targeted monitoring for USDT contract: ${this.config.usdtContract}`);
-        console.log("   This filters for transactions TO the USDT contract only");
+        this.wsProvider = new ethers.providers.WebSocketProvider(wsUrl);
+
+        // Add error handler to prevent fatal crashes
+        this.wsProvider._websocket.on("error", (err) => {
+          console.error("⚠️ WebSocket error (non-fatal):", err.message);
+          console.log("   Falling back to HTTP provider");
+          this.wsProvider = this.provider;
+        });
+
+        this.wsProvider._websocket.on("close", () => {
+          console.log("⚠️ WebSocket closed, using HTTP provider");
+          this.wsProvider = this.provider;
+        });
+
+        console.log("✅ WebSocket connected");
+
+        // Set up targeted monitoring for USDT contract transactions
+        if (this.config.usdtContract) {
+          console.log(`🎯 Setting up targeted monitoring for USDT contract: ${this.config.usdtContract}`);
+          console.log("   This filters for transactions TO the USDT contract only");
+        }
+      } catch (error) {
+        console.error("⚠️ WebSocket connection failed:", error.message);
+        console.log("   Falling back to HTTP provider");
+        this.wsProvider = this.provider;
       }
     } else {
-      console.warn("⚠️ No WebSocket URL, using HTTP (slower)");
+      if (wsUrl && !isWebSocketUrl(wsUrl)) {
+        console.warn(`⚠️ Invalid WebSocket URL detected: ${wsUrl.substring(0, 50)}...`);
+        console.warn("   URLs must start with wss:// or ws://");
+      }
+      console.warn("⚠️ No valid WebSocket URL, using HTTP (slower)");
       this.wsProvider = this.provider;
     }
 

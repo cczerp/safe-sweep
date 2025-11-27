@@ -12,6 +12,13 @@ const { UltraFastSweeper } = require("./ultra_fast_sweeper");
 const { DynamicGasBidder } = require("./dynamic_gas_bidder");
 require("dotenv").config();
 
+/**
+ * Validate if URL is a proper WebSocket URL
+ */
+function isWebSocketUrl(url) {
+  return typeof url === "string" && (url.startsWith("wss://") || url.startsWith("ws://"));
+}
+
 // Test configuration
 const CONFIG = {
   sweeperAddress: process.env.SWEEPER_MODULE,
@@ -175,8 +182,21 @@ class SetupTester {
         continue;
       }
 
+      // Validate WebSocket URL format
+      if (!isWebSocketUrl(endpoint.url)) {
+        this.fail(`${endpoint.name}: Invalid URL (must start with wss:// or ws://)`);
+        console.log(`   Got: ${endpoint.url.substring(0, 50)}...`);
+        continue;
+      }
+
       try {
         const provider = new ethers.providers.WebSocketProvider(endpoint.url);
+
+        // Add error handler to prevent crashes
+        provider._websocket.on("error", (err) => {
+          console.error(`   Error: ${err.message}`);
+        });
+
         await provider.getNetwork();
         this.pass(`${endpoint.name}: Connected`);
         provider.destroy();
