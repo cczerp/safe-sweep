@@ -38,6 +38,14 @@ class UltimateDefenseMonitorV2 {
     this.isMonitoring = false;
     this.detectedThreats = new Map();
 
+    // WebSocket reconnection management
+    this.wsReconnectAttempts = 0;
+    this.maxWsReconnectAttempts = 10;
+    this.wsReconnectDelay = 2000; // Start with 2 seconds
+    this.wsReconnecting = false;
+    this.wssUrl = null;
+    this.usingHttpFallback = false;
+
     // Performance tracking
     this.stats = {
       threatsDetected: 0,
@@ -46,6 +54,8 @@ class UltimateDefenseMonitorV2 {
       usedPreSigned: 0,
       usedDynamicGas: 0,
       avgDetectionTime: [],
+      wsReconnections: 0,
+      wsFailures: 0,
     };
   }
 
@@ -62,47 +72,9 @@ class UltimateDefenseMonitorV2 {
     console.log("\n📡 Connecting to network...");
     this.provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrl);
 
-    // Try WebSocket providers with validation and error handling
-    const wsUrl = this.config.quicknodeWss || this.config.alchemyWss;
-    if (wsUrl && isWebSocketUrl(wsUrl)) {
-      try {
-        console.log("🔌 Connecting to WebSocket for mempool monitoring...");
-        console.log(`   URL: ${wsUrl.substring(0, 30)}...`);
-
-        this.wsProvider = new ethers.providers.WebSocketProvider(wsUrl);
-
-        // Add error handler to prevent fatal crashes
-        this.wsProvider._websocket.on("error", (err) => {
-          console.error("⚠️ WebSocket error (non-fatal):", err.message);
-          console.log("   Falling back to HTTP provider");
-          this.wsProvider = this.provider;
-        });
-
-        this.wsProvider._websocket.on("close", () => {
-          console.log("⚠️ WebSocket closed, using HTTP provider");
-          this.wsProvider = this.provider;
-        });
-
-        console.log("✅ WebSocket connected");
-
-        // Set up targeted monitoring for USDT contract transactions
-        if (this.config.usdtContract) {
-          console.log(`🎯 Setting up targeted monitoring for USDT contract: ${this.config.usdtContract}`);
-          console.log("   This filters for transactions TO the USDT contract only");
-        }
-      } catch (error) {
-        console.error("⚠️ WebSocket connection failed:", error.message);
-        console.log("   Falling back to HTTP provider");
-        this.wsProvider = this.provider;
-      }
-    } else {
-      if (wsUrl && !isWebSocketUrl(wsUrl)) {
-        console.warn(`⚠️ Invalid WebSocket URL detected: ${wsUrl.substring(0, 50)}...`);
-        console.warn("   URLs must start with wss:// or ws://");
-      }
-      console.warn("⚠️ No valid WebSocket URL, using HTTP (slower)");
-      this.wsProvider = this.provider;
-    }
+    // Try WebSocket providers with validation, error handling, and auto-reconnect
+    this.wssUrl = this.config.quicknodeWss || this.config.alchemyWss;
+    await this.connectWebSocket();
 
     // Initialize MEV Bundle Engine (PRIMARY defense)
     if (this.config.enableMEVBundles !== false) {
@@ -143,6 +115,263 @@ class UltimateDefenseMonitorV2 {
     console.log("\n✅ Ultimate Defense Monitor V2 READY");
     this.printDefenseStrategy();
     return true;
+  }
+
+  /**
+   * Connect to WebSocket with retry logic and auto-reconnection
+   */
+  async connectWebSocket(isReconnect = false) {
+    if (!this.wssUrl) {
+      console.warn("⚠️ No valid WebSocket URL configured, using HTTP (slower)");
+      this.wsProvider = this.provider;
+      this.usingHttpFallback = true;
+      return;
+    }
+
+    if (!isWebSocketUrl(this.wssUrl)) {
+      console.warn(`⚠️ Invalid WebSocket URL: ${this.wssUrl.substring(0, 50)}...`);
+      console.warn("   URLs must start with wss:// or ws://");
+      this.wsProvider = this.provider;
+      this.usingHttpFallback = true;
+      return;
+    }
+
+    const attemptText = isReconnect ? `(attempt ${this.wsReconnectAttempts + 1}/${this.maxWsReconnectAttempts})` : "";
+    console.log(`🔌 ${isReconnect ? "Reconnecting to" : "Connecting to"} WebSocket ${attemptText}...`);
+    console.log(`   URL: ${this.wssUrl.substring(0, 30)}...`);
+
+    try {
+      // Create new WebSocket provider
+      const newWsProvider = new ethers.providers.WebSocketProvider(this.wssUrl);
+
+      // Wait for connection with timeout
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          newWsProvider._websocket.once("open", resolve);
+          newWsProvider._websocket.once("error", reject);
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Connection timeout")), 10000))
+      ]);
+
+      // If we reach here, connection succeeded
+      console.log("✅ WebSocket connected successfully");
+
+      // Clean up old provider if reconnecting
+      if (this.wsProvider && this.wsProvider !== this.provider) {
+        try {
+          this.wsProvider.removeAllListeners();
+          this.wsProvider.destroy();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
+
+      this.wsProvider = newWsProvider;
+      this.usingHttpFallback = false;
+      this.wsReconnectAttempts = 0;
+      this.wsReconnectDelay = 2000; // Reset delay
+
+      if (isReconnect) {
+        this.stats.wsReconnections++;
+        console.log(`🔄 WebSocket reconnected successfully (total reconnections: ${this.stats.wsReconnections})`);
+
+        // Re-setup monitoring if we're actively monitoring
+        if (this.isMonitoring) {
+          console.log("🔄 Re-establishing monitoring listeners...");
+          this.setupMonitoringListeners();
+        }
+      }
+
+      // Set up error handler for auto-reconnection
+      this.wsProvider._websocket.on("error", (err) => {
+        console.error("⚠️ WebSocket error:", err.message);
+        this.stats.wsFailures++;
+        this.scheduleWebSocketReconnect();
+      });
+
+      this.wsProvider._websocket.on("close", (code, reason) => {
+        console.warn(`⚠️ WebSocket closed (code: ${code}, reason: ${reason || "unknown"})`);
+        this.stats.wsFailures++;
+        this.scheduleWebSocketReconnect();
+      });
+
+      // Set up targeted monitoring for USDT contract transactions
+      if (this.config.usdtContract && !isReconnect) {
+        console.log(`🎯 Setting up targeted monitoring for USDT contract: ${this.config.usdtContract}`);
+        console.log("   This filters for transactions TO the USDT contract only");
+      }
+
+    } catch (error) {
+      console.error(`❌ WebSocket connection failed: ${error.message}`);
+      this.stats.wsFailures++;
+
+      // Use HTTP as temporary fallback
+      if (!this.usingHttpFallback) {
+        console.log("   Using HTTP provider as temporary fallback...");
+        this.wsProvider = this.provider;
+        this.usingHttpFallback = true;
+      }
+
+      // Schedule reconnection attempt
+      this.scheduleWebSocketReconnect();
+    }
+  }
+
+  /**
+   * Schedule WebSocket reconnection with exponential backoff
+   */
+  scheduleWebSocketReconnect() {
+    if (this.wsReconnecting) {
+      return; // Already scheduled
+    }
+
+    if (this.wsReconnectAttempts >= this.maxWsReconnectAttempts) {
+      console.error(`❌ Max WebSocket reconnection attempts (${this.maxWsReconnectAttempts}) reached`);
+      console.error("   Staying on HTTP fallback. Restart application to retry WSS connection.");
+      return;
+    }
+
+    this.wsReconnecting = true;
+
+    // Calculate exponential backoff: 2s, 4s, 8s, 16s, 32s, max 60s
+    const delay = Math.min(this.wsReconnectDelay * Math.pow(2, this.wsReconnectAttempts), 60000);
+
+    console.log(`🔄 Scheduling WebSocket reconnection in ${delay / 1000}s...`);
+
+    setTimeout(async () => {
+      this.wsReconnectAttempts++;
+      this.wsReconnecting = false;
+      await this.connectWebSocket(true);
+    }, delay);
+  }
+
+  /**
+   * Setup monitoring listeners (can be called on reconnect)
+   */
+  setupMonitoringListeners() {
+    // Remove old listeners first
+    if (this.wsProvider && this.wsProvider !== this.provider) {
+      this.wsProvider.removeAllListeners("pending");
+      this.wsProvider.removeAllListeners("block");
+    }
+
+    // Re-setup pending transaction monitoring
+    let pendingTxCount = 0;
+    let usdtTxCount = 0;
+
+    this.wsProvider.on("pending", async (txHash) => {
+      try {
+        pendingTxCount++;
+        if (this.config.debug && pendingTxCount % 100 === 0) {
+          console.log(`🔍 Processed ${pendingTxCount} total pending txs (${usdtTxCount} USDT-related)`);
+        }
+
+        const tx = await this.provider.getTransaction(txHash);
+        if (!tx) return;
+
+        const safeAddr = this.config.safeAddress.toLowerCase();
+        const usdtAddr = this.config.usdtContract?.toLowerCase();
+
+        // TARGETED FILTERING: Only process transactions we care about
+        const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
+        const isUSDTCall = tx.to?.toLowerCase() === usdtAddr;
+
+        // Check if this is a transferFrom call mentioning our Safe
+        let isTransferFromSafe = false;
+        if (tx.data && tx.data.length >= 138 && tx.data.slice(0, 10) === "0x23b872dd") {
+          try {
+            const fromParam = "0x" + tx.data.slice(34, 74);
+            const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+            isTransferFromSafe = fromAddress.toLowerCase() === safeAddr;
+          } catch (e) {}
+        }
+
+        // Skip if not relevant to our Safe or USDT
+        if (!isDirectlyInvolved && !isUSDTCall && !isTransferFromSafe) {
+          return;
+        }
+
+        // Count USDT-related transactions
+        if (isUSDTCall) {
+          usdtTxCount++;
+        }
+
+        // Debug: Log all relevant transactions
+        if (this.config.debug) {
+          console.log(`\n🔍 DEBUG: Pending TX (relevant to Safe/USDT):`);
+          console.log(`   Hash: ${tx.hash}`);
+          console.log(`   From: ${tx.from}`);
+          console.log(`   To: ${tx.to}`);
+          console.log(`   Data: ${tx.data?.slice(0, 66)}...`);
+          if (isTransferFromSafe) {
+            console.log(`   ⚠️ This is a transferFrom targeting Safe!`);
+          }
+          if (isUSDTCall) {
+            console.log(`   📝 Call to USDT contract`);
+          }
+          if (isDirectlyInvolved) {
+            console.log(`   🎯 Direct Safe transaction`);
+          }
+        }
+
+        const threat = this.detectThreat(tx);
+        if (threat) {
+          await this.respondToThreat(threat);
+        }
+      } catch (error) {
+        // Expected for many pending txs
+      }
+    });
+
+    // Re-setup block monitoring
+    let lastBlockScanned = 0;
+    this.provider.on("block", async (blockNumber) => {
+      if (blockNumber <= lastBlockScanned) return;
+      lastBlockScanned = blockNumber;
+
+      if (this.config.debug) {
+        const wsStatus = this.usingHttpFallback ? "HTTP" : "WSS";
+        console.log(
+          `📦 Block ${blockNumber} [${wsStatus}] | Threats: ${this.stats.threatsDetected} | Responses: ${this.stats.responsesSent}`
+        );
+      }
+
+      // Inspect block transactions as backup (catch fast inclusions)
+      try {
+        const block = await this.provider.getBlockWithTransactions(blockNumber);
+        if (block && block.transactions) {
+          for (const tx of block.transactions) {
+            // Check if this transaction is a threat
+            const threat = this.detectThreat(tx);
+            if (threat && !this.detectedThreats.has(tx.hash)) {
+              console.log(`\n⚠️ THREAT FOUND IN BLOCK (missed in mempool!)`);
+              console.log(`   TX: ${tx.hash}`);
+              console.log(`   Block: ${blockNumber}`);
+              console.log(`   Type: ${threat.type}`);
+              console.log(`   This transaction was included too fast to front-run!`);
+              console.log(`   🔍 Your WebSocket provider may not broadcast all pending txs`);
+
+              // Log but don't respond (too late)
+              this.detectedThreats.set(tx.hash, { timestamp: Date.now(), threat });
+              this.stats.threatsDetected++;
+            }
+          }
+        }
+      } catch (error) {
+        // Block inspection is optional, don't crash
+        if (this.config.debug) {
+          console.log(`⚠️ Could not inspect block ${blockNumber}: ${error.message}`);
+        }
+      }
+
+      // Cleanup old threats
+      const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+      for (const [txHash, data] of this.detectedThreats.entries()) {
+        if (data.timestamp < fiveMinutesAgo) {
+          this.detectedThreats.delete(txHash);
+        }
+      }
+    });
   }
 
   /**
@@ -508,122 +737,15 @@ class UltimateDefenseMonitorV2 {
     console.log("\n👁️ MONITORING STARTED - Watching for threats...");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // STRATEGY 1: Monitor pending transactions
-    let pendingTxCount = 0;
-    let usdtTxCount = 0;
+    const wsStatus = this.usingHttpFallback ? "HTTP (fallback)" : "WebSocket";
+    console.log(`   Connection type: ${wsStatus}`);
+    if (this.usingHttpFallback) {
+      console.log("   ⚠️ Using HTTP fallback - mempool monitoring may be delayed");
+      console.log("   WebSocket will auto-reconnect if available");
+    }
 
-    this.wsProvider.on("pending", async (txHash) => {
-      try {
-        pendingTxCount++;
-        if (this.config.debug && pendingTxCount % 100 === 0) {
-          console.log(`🔍 Processed ${pendingTxCount} total pending txs (${usdtTxCount} USDT-related)`);
-        }
-
-        const tx = await this.provider.getTransaction(txHash);
-        if (!tx) return;
-
-        const safeAddr = this.config.safeAddress.toLowerCase();
-        const usdtAddr = this.config.usdtContract?.toLowerCase();
-
-        // TARGETED FILTERING: Only process transactions we care about
-        const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
-        const isUSDTCall = tx.to?.toLowerCase() === usdtAddr;
-
-        // Check if this is a transferFrom call mentioning our Safe
-        let isTransferFromSafe = false;
-        if (tx.data && tx.data.length >= 138 && tx.data.slice(0, 10) === "0x23b872dd") {
-          try {
-            const fromParam = "0x" + tx.data.slice(34, 74);
-            const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
-            isTransferFromSafe = fromAddress.toLowerCase() === safeAddr;
-          } catch (e) {}
-        }
-
-        // Skip if not relevant to our Safe or USDT
-        if (!isDirectlyInvolved && !isUSDTCall && !isTransferFromSafe) {
-          return;
-        }
-
-        // Count USDT-related transactions
-        if (isUSDTCall) {
-          usdtTxCount++;
-        }
-
-        // Debug: Log all relevant transactions
-        if (this.config.debug) {
-          console.log(`\n🔍 DEBUG: Pending TX (relevant to Safe/USDT):`);
-          console.log(`   Hash: ${tx.hash}`);
-          console.log(`   From: ${tx.from}`);
-          console.log(`   To: ${tx.to}`);
-          console.log(`   Data: ${tx.data?.slice(0, 66)}...`);
-          if (isTransferFromSafe) {
-            console.log(`   ⚠️ This is a transferFrom targeting Safe!`);
-          }
-          if (isUSDTCall) {
-            console.log(`   📝 Call to USDT contract`);
-          }
-          if (isDirectlyInvolved) {
-            console.log(`   🎯 Direct Safe transaction`);
-          }
-        }
-
-        const threat = this.detectThreat(tx);
-        if (threat) {
-          await this.respondToThreat(threat);
-        }
-      } catch (error) {
-        // Expected for many pending txs
-      }
-    });
-
-    // STRATEGY 2: Aggressively scan each block for threats
-    let lastBlockScanned = 0;
-    this.provider.on("block", async (blockNumber) => {
-      if (blockNumber <= lastBlockScanned) return;
-      lastBlockScanned = blockNumber;
-
-      if (this.config.debug) {
-        console.log(
-          `📦 Block ${blockNumber} | Threats: ${this.stats.threatsDetected} | Responses: ${this.stats.responsesSent}`
-        );
-      }
-
-      // Inspect block transactions as backup (catch fast inclusions)
-      try {
-        const block = await this.provider.getBlockWithTransactions(blockNumber);
-        if (block && block.transactions) {
-          for (const tx of block.transactions) {
-            // Check if this transaction is a threat
-            const threat = this.detectThreat(tx);
-            if (threat && !this.detectedThreats.has(tx.hash)) {
-              console.log(`\n⚠️ THREAT FOUND IN BLOCK (missed in mempool!)`);
-              console.log(`   TX: ${tx.hash}`);
-              console.log(`   Block: ${blockNumber}`);
-              console.log(`   Type: ${threat.type}`);
-              console.log(`   This transaction was included too fast to front-run!`);
-              console.log(`   🔍 Your WebSocket provider may not broadcast all pending txs`);
-
-              // Log but don't respond (too late)
-              this.detectedThreats.set(tx.hash, { timestamp: Date.now(), threat });
-              this.stats.threatsDetected++;
-            }
-          }
-        }
-      } catch (error) {
-        // Block inspection is optional, don't crash
-        if (this.config.debug) {
-          console.log(`⚠️ Could not inspect block ${blockNumber}: ${error.message}`);
-        }
-      }
-
-      // Cleanup old threats
-      const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-      for (const [txHash, data] of this.detectedThreats.entries()) {
-        if (data.timestamp < fiveMinutesAgo) {
-          this.detectedThreats.delete(txHash);
-        }
-      }
-    });
+    // Setup monitoring listeners
+    this.setupMonitoringListeners();
 
     console.log("✅ Monitoring active - waiting for threats...");
     console.log("Press Ctrl+C to stop\n");

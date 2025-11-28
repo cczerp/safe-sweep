@@ -27,11 +27,18 @@ class MEVBundleEngine {
     this.provider = null;
     this.signer = null;
     this.bloxrouteWs = null;
+    this.bloxrouteAuthHeader = null;
 
     // Bundle configuration
     this.bundleTimeout = config.bundleTimeout || 30; // seconds
     this.maxBlocksAhead = config.maxBlocksAhead || 3; // try to include in next 3 blocks
     this.bundlePriorityFee = config.bundlePriorityFee || ethers.utils.parseUnits("50", "gwei");
+
+    // BloxRoute reconnection management
+    this.bloxrouteReconnectAttempts = 0;
+    this.maxBloxrouteReconnectAttempts = 5;
+    this.bloxrouteReconnectDelay = 2000;
+    this.bloxrouteReconnecting = false;
 
     // Statistics
     this.stats = {
@@ -39,6 +46,7 @@ class MEVBundleEngine {
       bundlesSubmitted: 0,
       bundlesIncluded: 0,
       bundlesFailed: 0,
+      bloxrouteReconnections: 0,
     };
 
     console.log("   - Bundle timeout: " + this.bundleTimeout + "s");
@@ -56,6 +64,7 @@ class MEVBundleEngine {
     this.provider = provider;
     this.signer = new ethers.Wallet(privateKey, provider);
     this.alchemyApiKey = alchemyApiKey;
+    this.bloxrouteAuthHeader = bloxrouteHeader;
 
     console.log("🔧 MEV Bundle Engine Configuration:");
     console.log("   - Wallet: " + this.signer.address);
@@ -70,11 +79,9 @@ class MEVBundleEngine {
     }
 
     // Setup BloxRoute as fallback
-    if (bloxrouteHeader && !alchemyApiKey) {
+    if (bloxrouteHeader) {
       console.log("   - BloxRoute: Setting up...");
       await this.setupBloxRoute(bloxrouteHeader);
-    } else if (bloxrouteHeader) {
-      console.log("   - BloxRoute: Available as fallback");
     } else {
       console.log("   - BloxRoute: Not configured");
     }
@@ -83,36 +90,73 @@ class MEVBundleEngine {
   }
 
   /**
-   * Setup BloxRoute WebSocket for bundle submission
+   * Setup BloxRoute WebSocket for bundle submission with auto-reconnect
    */
-  async setupBloxRoute(authHeader) {
+  async setupBloxRoute(authHeader, isReconnect = false) {
     return new Promise((resolve) => {
       try {
-        this.bloxrouteWs = new WebSocket("wss://api.blxrbdn.com/ws", {
+        const attemptText = isReconnect ? `(attempt ${this.bloxrouteReconnectAttempts + 1}/${this.maxBloxrouteReconnectAttempts})` : "";
+        console.log(`   ${isReconnect ? "🔄 Reconnecting" : "🔗 Connecting"} to BloxRoute ${attemptText}...`);
+
+        const ws = new WebSocket("wss://api.blxrbdn.com/ws", {
           headers: {
             Authorization: authHeader,
           },
           rejectUnauthorized: false,
         });
 
-        this.bloxrouteWs.on("open", () => {
+        const connectionTimeout = setTimeout(() => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            console.log("   ⏰ BloxRoute connection timeout");
+            ws.terminate();
+            this.scheduleBloxrouteReconnect();
+            resolve(false);
+          }
+        }, 10000);
+
+        ws.on("open", () => {
+          clearTimeout(connectionTimeout);
           console.log("   ✅ BloxRoute WebSocket connected (bundles enabled)");
+
+          // Clean up old connection if reconnecting
+          if (this.bloxrouteWs && this.bloxrouteWs !== ws) {
+            try {
+              this.bloxrouteWs.removeAllListeners();
+              this.bloxrouteWs.terminate();
+            } catch (e) {
+              // Ignore
+            }
+          }
+
+          this.bloxrouteWs = ws;
+          this.bloxrouteReconnectAttempts = 0;
+          this.bloxrouteReconnectDelay = 2000;
+
+          if (isReconnect) {
+            this.stats.bloxrouteReconnections++;
+            console.log(`   Total BloxRoute reconnections: ${this.stats.bloxrouteReconnections}`);
+          }
+
           resolve(true);
         });
 
-        this.bloxrouteWs.on("error", (error) => {
+        ws.on("error", (error) => {
+          clearTimeout(connectionTimeout);
           console.log("   ⚠️ BloxRoute error:", error.message);
-          this.bloxrouteWs = null;
+          this.scheduleBloxrouteReconnect();
           resolve(false);
         });
 
-        this.bloxrouteWs.on("close", () => {
-          console.log("   ⚠️ BloxRoute disconnected");
-          this.bloxrouteWs = null;
+        ws.on("close", (code, reason) => {
+          console.log(`   ⚠️ BloxRoute disconnected (code: ${code}, reason: ${reason || "unknown"})`);
+          if (this.bloxrouteWs === ws) {
+            this.bloxrouteWs = null;
+          }
+          this.scheduleBloxrouteReconnect();
         });
 
         // Add message handler for bundle responses
-        this.bloxrouteWs.on("message", (data) => {
+        ws.on("message", (data) => {
           try {
             const response = JSON.parse(data.toString());
             if (response.method === "subscribe" && response.params?.result?.bundleHash) {
@@ -123,19 +167,44 @@ class MEVBundleEngine {
           }
         });
 
-        setTimeout(() => {
-          if (!this.bloxrouteWs || this.bloxrouteWs.readyState !== WebSocket.OPEN) {
-            console.log("   ⏰ BloxRoute connection timeout");
-            this.bloxrouteWs = null;
-            resolve(false);
-          }
-        }, 5000);
       } catch (error) {
         console.log("   ❌ BloxRoute setup failed:", error.message);
-        this.bloxrouteWs = null;
+        this.scheduleBloxrouteReconnect();
         resolve(false);
       }
     });
+  }
+
+  /**
+   * Schedule BloxRoute reconnection with exponential backoff
+   */
+  scheduleBloxrouteReconnect() {
+    if (!this.bloxrouteAuthHeader) {
+      return; // No auth header, can't reconnect
+    }
+
+    if (this.bloxrouteReconnecting) {
+      return; // Already scheduled
+    }
+
+    if (this.bloxrouteReconnectAttempts >= this.maxBloxrouteReconnectAttempts) {
+      console.log(`   ⚠️ Max BloxRoute reconnection attempts (${this.maxBloxrouteReconnectAttempts}) reached`);
+      console.log("   BloxRoute bundles will stay offline. Using Alchemy or other methods.");
+      return;
+    }
+
+    this.bloxrouteReconnecting = true;
+
+    // Exponential backoff: 2s, 4s, 8s, 16s, 32s, max 60s
+    const delay = Math.min(this.bloxrouteReconnectDelay * Math.pow(2, this.bloxrouteReconnectAttempts), 60000);
+
+    console.log(`   🔄 Scheduling BloxRoute reconnection in ${delay / 1000}s...`);
+
+    setTimeout(async () => {
+      this.bloxrouteReconnectAttempts++;
+      this.bloxrouteReconnecting = false;
+      await this.setupBloxRoute(this.bloxrouteAuthHeader, true);
+    }, delay);
   }
 
   /**
