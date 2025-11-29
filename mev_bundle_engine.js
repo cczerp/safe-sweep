@@ -169,6 +169,13 @@ class MEVBundleEngine {
 
     } catch (error) {
       console.error("   ❌ Alchemy bundle failed:", error.message);
+      if (error.response) {
+        console.error("      Status:", error.response.status);
+        console.error("      Response data:", JSON.stringify(error.response.data, null, 2));
+      }
+      if (error.request && !error.response) {
+        console.error("      No response received from Alchemy");
+      }
       this.stats.bundlesFailed++;
       throw error;
     }

@@ -173,7 +173,10 @@ class UltraFastSweeper {
             return { source: "Primary RPC", result, time: Date.now() - startTime };
           })
           .catch((err) => {
-            console.log(`   ❌ Primary RPC failed: ${err.message.substring(0, 100)}`);
+            console.log(`   ❌ Primary RPC failed: ${err.message}`);
+            if (err.error && err.error.message) {
+              console.log(`      Error details: ${err.error.message}`);
+            }
             return null;
           });
         broadcastPromises.push(primaryPromise);
@@ -188,7 +191,10 @@ class UltraFastSweeper {
               return { source: `Backup RPC ${i + 1}`, result, time: Date.now() - startTime };
             })
             .catch((err) => {
-              console.log(`   ❌ Backup RPC ${i + 1} failed`);
+              console.log(`   ❌ Backup RPC ${i + 1} failed: ${err.message}`);
+              if (err.error && err.error.message) {
+                console.log(`      Error details: ${err.error.message}`);
+              }
               return null;
             });
           broadcastPromises.push(backupPromise);
