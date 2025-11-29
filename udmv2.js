@@ -194,10 +194,15 @@ class UltimateDefenseMonitorV2 {
         this.scheduleWebSocketReconnect();
       });
 
-      // Set up targeted monitoring for USDT contract transactions
-      if (this.config.usdtContract && !isReconnect) {
-        console.log(`🎯 Setting up targeted monitoring for USDT contract: ${this.config.usdtContract}`);
-        console.log("   This filters for transactions TO the USDT contract only");
+      // Set up targeted monitoring
+      if (!isReconnect) {
+        console.log(`🎯 Setting up targeted monitoring for Safe: ${this.config.safeAddress}`);
+        console.log("   Watching for:");
+        console.log("   1. Direct transactions from/to Safe");
+        console.log("   2. transferFrom() calls draining Safe");
+        if (this.config.usdtContract) {
+          console.log(`   USDT Contract: ${this.config.usdtContract}`);
+        }
       }
 
     } catch (error) {
@@ -256,57 +261,60 @@ class UltimateDefenseMonitorV2 {
 
     // Re-setup pending transaction monitoring
     let pendingTxCount = 0;
-    let usdtTxCount = 0;
+    let relevantTxCount = 0;
 
     this.wsProvider.on("pending", async (txHash) => {
       try {
         pendingTxCount++;
         if (this.config.debug && pendingTxCount % 100 === 0) {
-          console.log(`🔍 Processed ${pendingTxCount} total pending txs (${usdtTxCount} USDT-related)`);
+          console.log(`🔍 Processed ${pendingTxCount} total pending txs (${relevantTxCount} relevant to Safe)`);
         }
 
         const tx = await this.provider.getTransaction(txHash);
         if (!tx) return;
 
         const safeAddr = this.config.safeAddress.toLowerCase();
-        const usdtAddr = this.config.usdtContract?.toLowerCase();
 
         // TARGETED FILTERING: Only process transactions we care about
         const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
-        const isUSDTCall = tx.to?.toLowerCase() === usdtAddr;
 
-        // Check if this is a transferFrom call mentioning our Safe
+        // Check if this is a transferFrom call where OUR SAFE is being drained
         let isTransferFromSafe = false;
+        let transferFromContract = null;
         if (tx.data && tx.data.length >= 138 && tx.data.slice(0, 10) === "0x23b872dd") {
           try {
             const fromParam = "0x" + tx.data.slice(34, 74);
             const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
-            isTransferFromSafe = fromAddress.toLowerCase() === safeAddr;
-          } catch (e) {}
+            if (fromAddress.toLowerCase() === safeAddr) {
+              isTransferFromSafe = true;
+              transferFromContract = tx.to;
+            }
+          } catch (e) {
+            // Invalid address encoding, skip
+          }
         }
 
-        // Skip if not relevant to our Safe or USDT
-        if (!isDirectlyInvolved && !isUSDTCall && !isTransferFromSafe) {
+        // CRITICAL: Skip if not relevant to our Safe
+        // We ONLY care about:
+        // 1. Transactions directly from/to our Safe
+        // 2. transferFrom() calls where our Safe is being drained
+        if (!isDirectlyInvolved && !isTransferFromSafe) {
           return;
         }
 
-        // Count USDT-related transactions
-        if (isUSDTCall) {
-          usdtTxCount++;
-        }
+        // Count relevant transactions
+        relevantTxCount++;
 
         // Debug: Log all relevant transactions
         if (this.config.debug) {
-          console.log(`\n🔍 DEBUG: Pending TX (relevant to Safe/USDT):`);
+          console.log(`\n🔍 DEBUG: Pending TX (relevant to Safe):`);
           console.log(`   Hash: ${tx.hash}`);
           console.log(`   From: ${tx.from}`);
           console.log(`   To: ${tx.to}`);
           console.log(`   Data: ${tx.data?.slice(0, 66)}...`);
           if (isTransferFromSafe) {
-            console.log(`   ⚠️ This is a transferFrom targeting Safe!`);
-          }
-          if (isUSDTCall) {
-            console.log(`   📝 Call to USDT contract`);
+            console.log(`   🚨 THREAT: transferFrom() draining Safe!`);
+            console.log(`   🎯 Token Contract: ${transferFromContract}`);
           }
           if (isDirectlyInvolved) {
             console.log(`   🎯 Direct Safe transaction`);
