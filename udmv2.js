@@ -67,6 +67,8 @@ class UltimateDefenseMonitorV2 {
     console.log(`  - Emergency Gas: ${this.config.emergencyGasMult}x`);
     console.log(`  - Gas Premium: +${(this.config.gasPremium || 0.5) * 100}%`);
     console.log(`  - MEV Bundles: ${this.config.enableMEVBundles !== false ? "✅ ENABLED" : "❌ Disabled"}`);
+    console.log(`  - Debug Mode: ${this.config.debug ? "✅ ENABLED" : "❌ Disabled"}`);
+    console.log(`  - Verbose Mode: ${this.config.verbose ? "✅ ENABLED (will log ALL Safe txs)" : "❌ Disabled"}`);
 
     // Setup providers
     console.log("\n📡 Connecting to network...");
@@ -301,8 +303,10 @@ class UltimateDefenseMonitorV2 {
           console.log(`   From: ${tx.from}`);
           console.log(`   To: ${tx.to}`);
           try {
-            const fromParam = "0x" + tx.data.slice(34, 74);
-            const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+            // transferFrom(address from, address to, uint256 amount)
+            // Data layout: 0x + 8char sig + 64char param1 + 64char param2 + 64char param3
+            // The 'from' address is in param1, positions 34-73 (40 hex chars)
+            const fromAddress = ethers.utils.getAddress("0x" + tx.data.slice(34, 74));
             console.log(`   transferFrom 'from' param: ${fromAddress}`);
             console.log(`   Your Safe: ${this.config.safeAddress}`);
             console.log(`   Match: ${fromAddress.toLowerCase() === safeAddr ? "✅ YES" : "❌ NO"}`);
@@ -319,8 +323,9 @@ class UltimateDefenseMonitorV2 {
         let transferFromContract = null;
         if (tx.data && tx.data.length >= 138 && tx.data.slice(0, 10) === "0x23b872dd") {
           try {
-            const fromParam = "0x" + tx.data.slice(34, 74);
-            const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+            // transferFrom(address from, address to, uint256 amount)
+            // Extract the 'from' address (first parameter, chars 34-73)
+            const fromAddress = ethers.utils.getAddress("0x" + tx.data.slice(34, 74));
             if (fromAddress.toLowerCase() === safeAddr) {
               isTransferFromSafe = true;
               transferFromContract = tx.to;
@@ -513,9 +518,8 @@ class UltimateDefenseMonitorV2 {
       // transferFrom(address from, address to, uint256 amount)
       if (functionSig === "0x23b872dd") {
         try {
-          // Extract 'from' address (first parameter, bytes 10-74)
-          const fromParam = "0x" + tx.data.slice(34, 74);
-          const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+          // Extract 'from' address (first parameter, positions 34-73 = 40 hex chars)
+          const fromAddress = ethers.utils.getAddress("0x" + tx.data.slice(34, 74));
 
           if (fromAddress.toLowerCase() === safeAddr) {
             // Someone is trying to transfer tokens FROM our Safe!
