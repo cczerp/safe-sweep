@@ -20,22 +20,14 @@ class UltraFastSweeper {
 
     this.provider = null;
     this.backupProviders = [];
-    this.bloxrouteWs = null;
     this.signer = null;
     this.preSignedPool = null;
-
-    // BloxRoute reconnection management
-    this.bloxrouteReconnectAttempts = 0;
-    this.maxBloxrouteReconnectAttempts = 5;
-    this.bloxrouteReconnectDelay = 2000;
-    this.bloxrouteReconnecting = false;
 
     // Performance tracking
     this.stats = {
       detectionToSend: [],
       successfulSweeps: 0,
       failedSweeps: 0,
-      bloxrouteReconnections: 0,
     };
   }
 
@@ -46,9 +38,6 @@ class UltraFastSweeper {
     console.log(`  - Sweeper: ${this.config.sweeperAddress}`);
     console.log(`  - USDT: ${this.config.usdtContract}`);
     console.log(`  - Emergency Gas Multiplier: ${this.config.emergencyGasMult}x`);
-    console.log(
-      `  - BloxRoute: ${this.config.bloxrouteHeader ? "✅ Enabled" : "❌ Disabled"}`
-    );
 
     if (!this.config.rpcUrl) throw new Error("RPC_URL missing");
     if (!this.config.privateKey) throw new Error("PRIVATE_KEY missing");
@@ -61,12 +50,6 @@ class UltraFastSweeper {
 
     // Setup backup providers for shotgun submission
     await this.setupBackupProviders();
-
-    // Setup BloxRoute WebSocket
-    if (this.config.bloxrouteHeader) {
-      console.log("🔗 Setting up BloxRoute...");
-      await this.setupBloxRoute();
-    }
 
     // Wallet setup
     console.log("🔑 Setting up wallet...");
@@ -124,158 +107,6 @@ class UltraFastSweeper {
   }
 
   /**
-   * Setup BloxRoute WebSocket connection with auto-reconnect
-   */
-  async setupBloxRoute(isReconnect = false) {
-    return new Promise((resolve) => {
-      try {
-        const attemptText = isReconnect ? `(attempt ${this.bloxrouteReconnectAttempts + 1}/${this.maxBloxrouteReconnectAttempts})` : "";
-        console.log(`${isReconnect ? "🔄 Reconnecting" : "🔗 Connecting"} to BloxRoute ${attemptText}...`);
-
-        const ws = new WebSocket("wss://api.blxrbdn.com/ws", {
-          headers: {
-            Authorization: this.config.bloxrouteHeader,
-          },
-          rejectUnauthorized: false,
-        });
-
-        const connectionTimeout = setTimeout(() => {
-          if (ws.readyState !== WebSocket.OPEN) {
-            console.log("⏰ BloxRoute connection timeout");
-            ws.terminate();
-            this.scheduleBloxrouteReconnect();
-            resolve();
-          }
-        }, 10000);
-
-        ws.on("open", () => {
-          clearTimeout(connectionTimeout);
-          console.log("✅ BloxRoute WebSocket connected");
-
-          // Clean up old connection if reconnecting
-          if (this.bloxrouteWs && this.bloxrouteWs !== ws) {
-            try {
-              this.bloxrouteWs.removeAllListeners();
-              this.bloxrouteWs.terminate();
-            } catch (e) {
-              // Ignore
-            }
-          }
-
-          this.bloxrouteWs = ws;
-          this.bloxrouteReconnectAttempts = 0;
-          this.bloxrouteReconnectDelay = 2000;
-
-          if (isReconnect) {
-            this.stats.bloxrouteReconnections++;
-            console.log(`   Total BloxRoute reconnections: ${this.stats.bloxrouteReconnections}`);
-          }
-
-          resolve();
-        });
-
-        ws.on("error", (error) => {
-          clearTimeout(connectionTimeout);
-          console.log("⚠️ BloxRoute error:", error.message);
-          this.scheduleBloxrouteReconnect();
-          resolve();
-        });
-
-        ws.on("close", (code, reason) => {
-          console.log(`⚠️ BloxRoute disconnected (code: ${code}, reason: ${reason || "unknown"})`);
-          if (this.bloxrouteWs === ws) {
-            this.bloxrouteWs = null;
-          }
-          this.scheduleBloxrouteReconnect();
-        });
-
-      } catch (error) {
-        console.log("⚠️ BloxRoute setup failed:", error.message);
-        this.scheduleBloxrouteReconnect();
-        resolve();
-      }
-    });
-  }
-
-  /**
-   * Schedule BloxRoute reconnection with exponential backoff
-   */
-  scheduleBloxrouteReconnect() {
-    if (this.bloxrouteReconnecting) {
-      return; // Already scheduled
-    }
-
-    if (this.bloxrouteReconnectAttempts >= this.maxBloxrouteReconnectAttempts) {
-      console.log(`⚠️ Max BloxRoute reconnection attempts (${this.maxBloxrouteReconnectAttempts}) reached`);
-      console.log("   BloxRoute will stay offline. Shotgun will use RPC providers only.");
-      return;
-    }
-
-    this.bloxrouteReconnecting = true;
-
-    // Exponential backoff: 2s, 4s, 8s, 16s, 32s, max 60s
-    const delay = Math.min(this.bloxrouteReconnectDelay * Math.pow(2, this.bloxrouteReconnectAttempts), 60000);
-
-    console.log(`🔄 Scheduling BloxRoute reconnection in ${delay / 1000}s...`);
-
-    setTimeout(async () => {
-      this.bloxrouteReconnectAttempts++;
-      this.bloxrouteReconnecting = false;
-      await this.setupBloxRoute(true);
-    }, delay);
-  }
-
-  /**
-   * Send via BloxRoute private relay
-   */
-  async sendViaBloxRoute(signedTx) {
-    return new Promise((resolve, reject) => {
-      if (!this.bloxrouteWs || this.bloxrouteWs.readyState !== WebSocket.OPEN) {
-        reject(new Error("BloxRoute not connected"));
-        return;
-      }
-
-      const txHex = signedTx.startsWith("0x") ? signedTx.slice(2) : signedTx;
-
-      const request = {
-        jsonrpc: "2.0",
-        id: Date.now(),
-        method: "blxr_private_tx",
-        params: {
-          transaction: txHex,
-          timeout: 30,
-          mev_builders: { all: "" },
-          node_validation: true,
-        },
-      };
-
-      const responseHandler = (data) => {
-        try {
-          const response = JSON.parse(data.toString());
-          if (response.id === request.id) {
-            this.bloxrouteWs.removeListener("message", responseHandler);
-            if (response.error) {
-              reject(new Error(`BloxRoute: ${response.error.message}`));
-            } else {
-              resolve(response.result);
-            }
-          }
-        } catch (e) {
-          // Ignore parsing errors
-        }
-      };
-
-      this.bloxrouteWs.on("message", responseHandler);
-      this.bloxrouteWs.send(JSON.stringify(request));
-
-      setTimeout(() => {
-        this.bloxrouteWs.removeListener("message", responseHandler);
-        reject(new Error("BloxRoute timeout"));
-      }, 10000);
-    });
-  }
-
-  /**
    * Wait for transaction confirmation with timeout
    */
   async waitForConfirmation(txHash, maxWaitTime = 60000) {
@@ -330,25 +161,11 @@ class UltraFastSweeper {
       try {
         const startTime = Date.now();
         console.log(`\n🔫 SHOTGUN BROADCAST: ${txType}${retry > 0 ? ` (Retry ${retry})` : ""}`);
-        console.log(`   Targeting ${this.backupProviders.length + 1} providers${this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN ? " + BloxRoute" : ""}`);
+        console.log(`   Targeting ${this.backupProviders.length + 1} RPC providers`);
 
         const broadcastPromises = [];
 
-        // Path 1: BloxRoute (if available)
-        if (this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN) {
-          const bloxPromise = this.sendViaBloxRoute(signedTx)
-            .then((result) => {
-              console.log(`   ✅ BloxRoute SUCCESS (${Date.now() - startTime}ms)`);
-              return { source: "BloxRoute", result, time: Date.now() - startTime };
-            })
-            .catch((err) => {
-              console.log(`   ❌ BloxRoute failed: ${err.message}`);
-              return null;
-            });
-          broadcastPromises.push(bloxPromise);
-        }
-
-        // Path 2: Primary RPC
+        // Path 1: Primary RPC
         const primaryPromise = this.provider
           .sendTransaction(signedTx)
           .then((result) => {
@@ -361,7 +178,7 @@ class UltraFastSweeper {
           });
         broadcastPromises.push(primaryPromise);
 
-        // Path 3+: All backup RPCs
+        // Path 2+: All backup RPCs
         for (let i = 0; i < this.backupProviders.length; i++) {
           const provider = this.backupProviders[i];
           const backupPromise = provider
@@ -615,9 +432,7 @@ class UltraFastSweeper {
       `   🎯 Pre-signed pool: ${this.preSignedPool.poolSize} txs per asset`
     );
     console.log(
-      `   🔫 Shotgun paths: ${this.backupProviders.length + 1} RPCs ${
-        this.bloxrouteWs ? "+ BloxRoute" : ""
-      }`
+      `   🔫 Shotgun paths: ${this.backupProviders.length + 1} RPC providers`
     );
     console.log(`   ⚡ Target reaction: <100ms detection → broadcast`);
     console.log(`   💎 Gas strategy: ${this.config.emergencyGasMult}x emergency`);
@@ -638,14 +453,7 @@ class UltraFastSweeper {
 
     const poolStats = this.preSignedPool.getPoolStats();
     console.log(`   Pre-signed pool: ${poolStats.usdt.available > 0 ? "✅" : "⚠️"} Ready`);
-    console.log(
-      `   BloxRoute: ${
-        this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN
-          ? "✅"
-          : "❌"
-      } ${this.bloxrouteWs ? "Connected" : "Disconnected"}`
-    );
-    console.log(`   Backup RPCs: ✅ ${this.backupProviders.length} available`);
+    console.log(`   RPC providers: ✅ ${this.backupProviders.length + 1} available`);
 
     const perfStats = this.getPerformanceStats();
     if (perfStats.totalSweeps > 0) {

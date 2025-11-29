@@ -89,7 +89,6 @@ class UltimateDefenseMonitorV2 {
       await this.mevEngine.initialize(
         this.provider,
         this.config.privateKey,
-        this.config.bloxrouteHeader,
         this.config.alchemyApiKey
       );
 
@@ -382,10 +381,9 @@ class UltimateDefenseMonitorV2 {
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     if (this.mevEngine && this.mevEngine.canSubmitBundles()) {
-      console.log("   🥇 PRIMARY: MEV Bundles (100% guaranteed ordering)");
-      console.log("      └─ BloxRoute bundle submission");
-      console.log("      └─ Your TX executes BEFORE attacker's");
-      console.log("      └─ Attacker TX fails (no funds left)");
+      console.log("   🥇 PRIMARY: MEV Bundles (Alchemy private transactions)");
+      console.log("      └─ Private transaction submission via Alchemy");
+      console.log("      └─ Prevents front-running and sandwich attacks");
       console.log("");
       console.log("   🥈 FALLBACK #1: Pre-Signed Pool + Shotgun");
       console.log("      └─ If bundle submission fails");
@@ -398,6 +396,8 @@ class UltimateDefenseMonitorV2 {
       console.log("");
       console.log("   🥈 FALLBACK: Dynamic Gas Bidding");
       console.log("      └─ Outbid attackers by 50%+");
+      console.log("");
+      console.log("   💡 TIP: Configure ALCHEMY_API_KEY for MEV bundle protection");
     }
 
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -854,7 +854,6 @@ if (require.main === module) {
     infuraHttp: process.env.INFURA_HTTP,
     ankrHttp: process.env.ANKR_HTTP,
     nodiesHttp: process.env.NODIES_HTTP,
-    bloxrouteHeader: process.env.BLOXROUTE_HEADER,
     privateKey: process.env.PRIVATE_KEY,
     vaultAddress: process.env.VAULT_ADDRESS,
     safeAddress: process.env.SAFE_ADDRESS,
