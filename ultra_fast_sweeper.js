@@ -20,7 +20,6 @@ class UltraFastSweeper {
 
     this.provider = null;
     this.backupProviders = [];
-    this.bloxrouteWs = null;
     this.signer = null;
     this.preSignedPool = null;
 
@@ -39,9 +38,6 @@ class UltraFastSweeper {
     console.log(`  - Sweeper: ${this.config.sweeperAddress}`);
     console.log(`  - USDT: ${this.config.usdtContract}`);
     console.log(`  - Emergency Gas Multiplier: ${this.config.emergencyGasMult}x`);
-    console.log(
-      `  - BloxRoute: ${this.config.bloxrouteHeader ? "✅ Enabled" : "❌ Disabled"}`
-    );
 
     if (!this.config.rpcUrl) throw new Error("RPC_URL missing");
     if (!this.config.privateKey) throw new Error("PRIVATE_KEY missing");
@@ -54,12 +50,6 @@ class UltraFastSweeper {
 
     // Setup backup providers for shotgun submission
     await this.setupBackupProviders();
-
-    // Setup BloxRoute WebSocket
-    if (this.config.bloxrouteHeader) {
-      console.log("🔗 Setting up BloxRoute...");
-      await this.setupBloxRoute();
-    }
 
     // Wallet setup
     console.log("🔑 Setting up wallet...");
@@ -117,169 +107,135 @@ class UltraFastSweeper {
   }
 
   /**
-   * Setup BloxRoute WebSocket connection
+   * Wait for transaction confirmation with timeout
    */
-  async setupBloxRoute() {
-    return new Promise((resolve) => {
+  async waitForConfirmation(txHash, maxWaitTime = 60000) {
+    console.log(`\n⏳ Waiting for transaction confirmation...`);
+    console.log(`   TX Hash: ${txHash}`);
+
+    const startTime = Date.now();
+    const checkInterval = 2000; // Check every 2 seconds
+
+    while (Date.now() - startTime < maxWaitTime) {
       try {
-        this.bloxrouteWs = new WebSocket("wss://api.blxrbdn.com/ws", {
-          headers: {
-            Authorization: this.config.bloxrouteHeader,
-          },
-          rejectUnauthorized: false,
-        });
+        const receipt = await this.provider.getTransactionReceipt(txHash);
 
-        this.bloxrouteWs.on("open", () => {
-          console.log("✅ BloxRoute WebSocket connected");
-          resolve();
-        });
-
-        this.bloxrouteWs.on("error", (error) => {
-          console.log("⚠️ BloxRoute error:", error.message);
-          this.bloxrouteWs = null;
-          resolve();
-        });
-
-        this.bloxrouteWs.on("close", () => {
-          console.log("⚠️ BloxRoute disconnected");
-          this.bloxrouteWs = null;
-        });
-
-        setTimeout(() => {
-          if (this.bloxrouteWs?.readyState !== WebSocket.OPEN) {
-            console.log("⏰ BloxRoute connection timeout");
-            this.bloxrouteWs = null;
-            resolve();
+        if (receipt) {
+          const waitTime = Date.now() - startTime;
+          if (receipt.status === 1) {
+            console.log(`✅ Transaction CONFIRMED in block ${receipt.blockNumber} (${waitTime}ms)`);
+            console.log(`   Gas used: ${receipt.gasUsed.toString()}`);
+            return { success: true, receipt, waitTime };
+          } else {
+            console.log(`❌ Transaction REVERTED in block ${receipt.blockNumber} (${waitTime}ms)`);
+            return { success: false, receipt, waitTime, reason: "Transaction reverted" };
           }
-        }, 5000);
-      } catch (error) {
-        console.log("⚠️ BloxRoute setup failed:", error.message);
-        this.bloxrouteWs = null;
-        resolve();
-      }
-    });
-  }
-
-  /**
-   * Send via BloxRoute private relay
-   */
-  async sendViaBloxRoute(signedTx) {
-    return new Promise((resolve, reject) => {
-      if (!this.bloxrouteWs || this.bloxrouteWs.readyState !== WebSocket.OPEN) {
-        reject(new Error("BloxRoute not connected"));
-        return;
-      }
-
-      const txHex = signedTx.startsWith("0x") ? signedTx.slice(2) : signedTx;
-
-      const request = {
-        jsonrpc: "2.0",
-        id: Date.now(),
-        method: "blxr_private_tx",
-        params: {
-          transaction: txHex,
-          timeout: 30,
-          mev_builders: { all: "" },
-          node_validation: true,
-        },
-      };
-
-      const responseHandler = (data) => {
-        try {
-          const response = JSON.parse(data.toString());
-          if (response.id === request.id) {
-            this.bloxrouteWs.removeListener("message", responseHandler);
-            if (response.error) {
-              reject(new Error(`BloxRoute: ${response.error.message}`));
-            } else {
-              resolve(response.result);
-            }
-          }
-        } catch (e) {
-          // Ignore parsing errors
         }
-      };
 
-      this.bloxrouteWs.on("message", responseHandler);
-      this.bloxrouteWs.send(JSON.stringify(request));
+        // Not mined yet, wait and check again
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
 
-      setTimeout(() => {
-        this.bloxrouteWs.removeListener("message", responseHandler);
-        reject(new Error("BloxRoute timeout"));
-      }, 10000);
-    });
+      } catch (error) {
+        // Error checking receipt, retry
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+      }
+    }
+
+    console.log(`⏰ Transaction confirmation timeout after ${maxWaitTime}ms`);
+    return { success: false, reason: "Confirmation timeout" };
   }
 
   /**
    * SHOTGUN SUBMISSION: Send same transaction through ALL paths simultaneously
-   * Returns as soon as first path succeeds
+   * Returns as soon as first path succeeds and confirms transaction
    */
-  async shotgunBroadcast(signedTx, txType = "sweep") {
-    const startTime = Date.now();
-    console.log(`\n🔫 SHOTGUN BROADCAST: ${txType}`);
-    console.log(`   Targeting ${this.backupProviders.length + 1} providers + BloxRoute`);
+  async shotgunBroadcast(signedTx, txType = "sweep", maxRetries = 2) {
+    let lastError = null;
 
-    const broadcastPromises = [];
+    for (let retry = 0; retry <= maxRetries; retry++) {
+      if (retry > 0) {
+        console.log(`\n🔄 Retry ${retry}/${maxRetries} for ${txType} sweep...`);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s between retries
+      }
 
-    // Path 1: BloxRoute (if available)
-    if (this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN) {
-      const bloxPromise = this.sendViaBloxRoute(signedTx)
-        .then((result) => {
-          console.log(`   ✅ BloxRoute SUCCESS (${Date.now() - startTime}ms)`);
-          return { source: "BloxRoute", result, time: Date.now() - startTime };
-        })
-        .catch((err) => {
-          console.log(`   ❌ BloxRoute failed: ${err.message}`);
-          return null;
-        });
-      broadcastPromises.push(bloxPromise);
+      try {
+        const startTime = Date.now();
+        console.log(`\n🔫 SHOTGUN BROADCAST: ${txType}${retry > 0 ? ` (Retry ${retry})` : ""}`);
+        console.log(`   Targeting ${this.backupProviders.length + 1} RPC providers`);
+
+        const broadcastPromises = [];
+
+        // Path 1: Primary RPC
+        const primaryPromise = this.provider
+          .sendTransaction(signedTx)
+          .then((result) => {
+            console.log(`   ✅ Primary RPC SUCCESS (${Date.now() - startTime}ms)`);
+            return { source: "Primary RPC", result, time: Date.now() - startTime };
+          })
+          .catch((err) => {
+            console.log(`   ❌ Primary RPC failed: ${err.message.substring(0, 100)}`);
+            return null;
+          });
+        broadcastPromises.push(primaryPromise);
+
+        // Path 2+: All backup RPCs
+        for (let i = 0; i < this.backupProviders.length; i++) {
+          const provider = this.backupProviders[i];
+          const backupPromise = provider
+            .sendTransaction(signedTx)
+            .then((result) => {
+              console.log(`   ✅ Backup RPC ${i + 1} SUCCESS (${Date.now() - startTime}ms)`);
+              return { source: `Backup RPC ${i + 1}`, result, time: Date.now() - startTime };
+            })
+            .catch((err) => {
+              console.log(`   ❌ Backup RPC ${i + 1} failed`);
+              return null;
+            });
+          broadcastPromises.push(backupPromise);
+        }
+
+        // Wait for all to complete, return first success
+        const results = await Promise.all(broadcastPromises);
+        const successResults = results.filter((r) => r !== null);
+
+        if (successResults.length === 0) {
+          throw new Error("All shotgun paths failed!");
+        }
+
+        // Return the fastest successful submission
+        const fastest = successResults.sort((a, b) => a.time - b.time)[0];
+
+        console.log(`\n🎯 SHOTGUN RESULT:`);
+        console.log(`   ✅ ${successResults.length}/${broadcastPromises.length} paths succeeded`);
+        console.log(`   ⚡ Fastest: ${fastest.source} in ${fastest.time}ms`);
+
+        // Extract transaction hash
+        const txHash = fastest.result.hash || fastest.result.txHash || fastest.result;
+
+        // Wait for confirmation (with timeout)
+        const confirmation = await this.waitForConfirmation(txHash, 30000);
+
+        if (confirmation.success) {
+          return fastest.result;
+        } else {
+          throw new Error(`Transaction broadcast but failed: ${confirmation.reason}`);
+        }
+
+      } catch (error) {
+        lastError = error;
+        console.error(`❌ Shotgun attempt ${retry + 1} failed: ${error.message}`);
+
+        // If this was the last retry, throw the error
+        if (retry === maxRetries) {
+          throw error;
+        }
+
+        // Otherwise, continue to next retry
+      }
     }
 
-    // Path 2: Primary RPC
-    const primaryPromise = this.provider
-      .sendTransaction(signedTx)
-      .then((result) => {
-        console.log(`   ✅ Primary RPC SUCCESS (${Date.now() - startTime}ms)`);
-        return { source: "Primary RPC", result, time: Date.now() - startTime };
-      })
-      .catch((err) => {
-        console.log(`   ❌ Primary RPC failed: ${err.message}`);
-        return null;
-      });
-    broadcastPromises.push(primaryPromise);
-
-    // Path 3+: All backup RPCs
-    for (let i = 0; i < this.backupProviders.length; i++) {
-      const provider = this.backupProviders[i];
-      const backupPromise = provider
-        .sendTransaction(signedTx)
-        .then((result) => {
-          console.log(`   ✅ Backup RPC ${i + 1} SUCCESS (${Date.now() - startTime}ms)`);
-          return { source: `Backup RPC ${i + 1}`, result, time: Date.now() - startTime };
-        })
-        .catch((err) => {
-          console.log(`   ❌ Backup RPC ${i + 1} failed`);
-          return null;
-        });
-      broadcastPromises.push(backupPromise);
-    }
-
-    // Wait for all to complete, return first success
-    const results = await Promise.all(broadcastPromises);
-    const successResults = results.filter((r) => r !== null);
-
-    if (successResults.length === 0) {
-      throw new Error("All shotgun paths failed!");
-    }
-
-    // Return the fastest successful submission
-    const fastest = successResults.sort((a, b) => a.time - b.time)[0];
-
-    console.log(`\n🎯 SHOTGUN RESULT:`);
-    console.log(`   ✅ ${successResults.length}/${broadcastPromises.length} paths succeeded`);
-    console.log(`   ⚡ Fastest: ${fastest.source} in ${fastest.time}ms`);
-
-    return fastest.result;
+    // Should never reach here, but just in case
+    throw lastError || new Error("Shotgun broadcast failed after all retries");
   }
 
   /**
@@ -321,10 +277,10 @@ class UltraFastSweeper {
     this.stats.detectionToSend.push(totalTime);
     this.stats.successfulSweeps++;
 
-    // Trigger pool regeneration in background
-    setTimeout(() => {
-      this.preSignedPool.checkAndRegeneratePools().catch(console.error);
-    }, 100);
+    // Trigger immediate pool regeneration (don't wait)
+    this.preSignedPool.checkAndRegeneratePools().catch(err => {
+      console.error("⚠️ Pool regeneration error:", err.message);
+    });
 
     return txResponse;
   }
@@ -360,9 +316,10 @@ class UltraFastSweeper {
     this.stats.detectionToSend.push(totalTime);
     this.stats.successfulSweeps++;
 
-    setTimeout(() => {
-      this.preSignedPool.checkAndRegeneratePools().catch(console.error);
-    }, 100);
+    // Trigger immediate pool regeneration (don't wait)
+    this.preSignedPool.checkAndRegeneratePools().catch(err => {
+      console.error("⚠️ Pool regeneration error:", err.message);
+    });
 
     return txResponse;
   }
@@ -398,9 +355,10 @@ class UltraFastSweeper {
     this.stats.detectionToSend.push(totalTime);
     this.stats.successfulSweeps++;
 
-    setTimeout(() => {
-      this.preSignedPool.checkAndRegeneratePools().catch(console.error);
-    }, 100);
+    // Trigger immediate pool regeneration (don't wait)
+    this.preSignedPool.checkAndRegeneratePools().catch(err => {
+      console.error("⚠️ Pool regeneration error:", err.message);
+    });
 
     return txResponse;
   }
@@ -474,9 +432,7 @@ class UltraFastSweeper {
       `   🎯 Pre-signed pool: ${this.preSignedPool.poolSize} txs per asset`
     );
     console.log(
-      `   🔫 Shotgun paths: ${this.backupProviders.length + 1} RPCs ${
-        this.bloxrouteWs ? "+ BloxRoute" : ""
-      }`
+      `   🔫 Shotgun paths: ${this.backupProviders.length + 1} RPC providers`
     );
     console.log(`   ⚡ Target reaction: <100ms detection → broadcast`);
     console.log(`   💎 Gas strategy: ${this.config.emergencyGasMult}x emergency`);
@@ -497,14 +453,7 @@ class UltraFastSweeper {
 
     const poolStats = this.preSignedPool.getPoolStats();
     console.log(`   Pre-signed pool: ${poolStats.usdt.available > 0 ? "✅" : "⚠️"} Ready`);
-    console.log(
-      `   BloxRoute: ${
-        this.bloxrouteWs && this.bloxrouteWs.readyState === WebSocket.OPEN
-          ? "✅"
-          : "❌"
-      } ${this.bloxrouteWs ? "Connected" : "Disconnected"}`
-    );
-    console.log(`   Backup RPCs: ✅ ${this.backupProviders.length} available`);
+    console.log(`   RPC providers: ✅ ${this.backupProviders.length + 1} available`);
 
     const perfStats = this.getPerformanceStats();
     if (perfStats.totalSweeps > 0) {
