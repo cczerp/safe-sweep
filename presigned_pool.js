@@ -332,7 +332,7 @@ class PreSignedTxPool {
   }
 
   /**
-   * Check if pools need regeneration (when nonces are consumed)
+   * Check if pools need regeneration (when nonces are consumed or pool depleted)
    */
   async checkAndRegeneratePools() {
     const currentNonce = await this.provider.getTransactionCount(
@@ -340,18 +340,35 @@ class PreSignedTxPool {
       "pending"
     );
 
-    if (currentNonce > this.baseNonce) {
-      console.log(`🔄 Nonce advanced from ${this.baseNonce} to ${currentNonce}, regenerating pools...`);
+    // Calculate pool availability
+    const usdtAvailable = this.pools.usdt.filter(tx => !tx.used).length;
+    const maticAvailable = this.pools.matic.filter(tx => !tx.used).length;
+
+    // Trigger regeneration if:
+    // 1. Nonce has advanced (transactions confirmed)
+    // 2. Pool is more than 50% depleted
+    const needsRegeneration =
+      currentNonce > this.baseNonce ||
+      usdtAvailable <= this.poolSize / 2 ||
+      maticAvailable <= this.poolSize / 2;
+
+    if (needsRegeneration) {
+      if (currentNonce > this.baseNonce) {
+        console.log(`🔄 Nonce advanced from ${this.baseNonce} to ${currentNonce}, regenerating pools...`);
+      } else {
+        console.log(`🔄 Pool depleted (USDT: ${usdtAvailable}/${this.poolSize}, MATIC: ${maticAvailable}/${this.poolSize}), regenerating...`);
+      }
+
       this.baseNonce = currentNonce;
 
       // Regenerate USDT pool (skip if no tokens)
       try {
         await this.generateUSDTPool();
       } catch (error) {
-        if (error.message.includes("No tokens to sweep")) {
+        if (error.message.includes("No tokens to sweep") || error.message.includes("execution reverted")) {
           console.log("   ℹ️ Skipping USDT pool (no tokens in Safe)");
         } else {
-          console.warn(`   ⚠️ Could not regenerate USDT pool: ${error.message}`);
+          console.warn(`   ⚠️ Could not regenerate USDT pool: ${error.message.substring(0, 100)}`);
         }
       }
 
@@ -359,10 +376,10 @@ class PreSignedTxPool {
       try {
         await this.generateMATICPool();
       } catch (error) {
-        if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC")) {
+        if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC") || error.message.includes("execution reverted")) {
           console.log("   ℹ️ Skipping MATIC pool (no tokens in Safe)");
         } else {
-          console.warn(`   ⚠️ Could not regenerate MATIC pool: ${error.message}`);
+          console.warn(`   ⚠️ Could not regenerate MATIC pool: ${error.message.substring(0, 100)}`);
         }
       }
 
@@ -371,27 +388,52 @@ class PreSignedTxPool {
         try {
           await this.generateTokenPool(tokenAddress);
         } catch (error) {
-          console.warn(`   ⚠️ Could not regenerate pool for ${tokenAddress}: ${error.message}`);
+          console.warn(`   ⚠️ Could not regenerate pool for ${tokenAddress}: ${error.message.substring(0, 100)}`);
         }
       }
     }
   }
 
   /**
-   * Refresh gas prices periodically (every block)
+   * Aggressively check and regenerate pools (called more frequently)
+   */
+  async aggressivePoolCheck() {
+    // Check pool availability without waiting for nonce
+    const usdtAvailable = this.pools.usdt.filter(tx => !tx.used).length;
+    const maticAvailable = this.pools.matic.filter(tx => !tx.used).length;
+
+    // If pool is critically low (< 2 txs), regenerate immediately
+    if (usdtAvailable < 2 || maticAvailable < 2) {
+      console.log(`⚠️ CRITICAL: Pool critically low! USDT: ${usdtAvailable}, MATIC: ${maticAvailable}`);
+      await this.checkAndRegeneratePools();
+    }
+  }
+
+  /**
+   * Refresh gas prices periodically (every block) and check pool health
    */
   startGasRefreshTimer() {
+    // Main refresh timer (every ~12s = 1 block on Polygon)
     setInterval(async () => {
       const now = Date.now();
 
       if (now - this.lastGasRefresh >= this.gasRefreshInterval) {
-        console.log("🔄 Gas prices may have changed, regenerating pools with fresh gas...");
+        if (this.config.debug) {
+          console.log("🔄 Gas prices may have changed, regenerating pools with fresh gas...");
+        }
 
         await this.checkAndRegeneratePools();
 
-        console.log("✅ Pools refreshed with current gas prices");
+        if (this.config.debug) {
+          console.log("✅ Pools refreshed with current gas prices");
+        }
       }
     }, this.gasRefreshInterval);
+
+    // Aggressive pool health check (every 3 seconds)
+    setInterval(async () => {
+      await this.aggressivePoolCheck();
+    }, 3000);
   }
 
   /**
