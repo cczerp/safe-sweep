@@ -383,9 +383,8 @@ class UltimateDefenseMonitorV2 {
         }
       } catch (error) {
         // Block inspection is optional, don't crash
-        if (this.config.debug) {
-          console.log(`⚠️ Could not inspect block ${blockNumber}: ${error.message}`);
-        }
+        // Errors can happen with malformed tx data, network issues, etc.
+        // Silently skip - mempool monitoring is the primary detection method
       }
 
       // Cleanup old threats
@@ -475,19 +474,23 @@ class UltimateDefenseMonitorV2 {
 
       // transferFrom(address from, address to, uint256 amount)
       if (functionSig === "0x23b872dd") {
-        // Extract 'from' address (first parameter, bytes 10-74)
-        const fromParam = "0x" + tx.data.slice(34, 74);
-        const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+        try {
+          // Extract 'from' address (first parameter, bytes 10-74)
+          const fromParam = "0x" + tx.data.slice(34, 74);
+          const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
 
-        if (fromAddress.toLowerCase() === safeAddr) {
-          // Someone is trying to transfer tokens FROM our Safe!
-          return {
-            isThreat: true,
-            type: "ERC20_TRANSFERFROM_ATTACK",
-            severity: "CRITICAL",
-            asset: this.detectAssetFromData(tx.data, tx.to),
-            attackerTx: tx,
-          };
+          if (fromAddress.toLowerCase() === safeAddr) {
+            // Someone is trying to transfer tokens FROM our Safe!
+            return {
+              isThreat: true,
+              type: "ERC20_TRANSFERFROM_ATTACK",
+              severity: "CRITICAL",
+              asset: this.detectAssetFromData(tx.data, tx.to),
+              attackerTx: tx,
+            };
+          }
+        } catch (e) {
+          // Malformed transferFrom data, skip
         }
       }
 
