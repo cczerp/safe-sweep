@@ -275,6 +275,23 @@ class UltimateDefenseMonitorV2 {
 
         const safeAddr = this.config.safeAddress.toLowerCase();
 
+        // SUPER VERBOSE: Log ALL transferFrom calls if verbose mode enabled
+        if (this.config.verbose && tx.data && tx.data.slice(0, 10) === "0x23b872dd") {
+          console.log(`\n🔍 VERBOSE: Found transferFrom() call:`);
+          console.log(`   Hash: ${tx.hash}`);
+          console.log(`   From: ${tx.from}`);
+          console.log(`   To: ${tx.to}`);
+          try {
+            const fromParam = "0x" + tx.data.slice(34, 74);
+            const fromAddress = ethers.utils.getAddress("0x" + fromParam.slice(26));
+            console.log(`   transferFrom 'from' param: ${fromAddress}`);
+            console.log(`   Your Safe: ${this.config.safeAddress}`);
+            console.log(`   Match: ${fromAddress.toLowerCase() === safeAddr ? "✅ YES" : "❌ NO"}`);
+          } catch (e) {
+            console.log(`   ⚠️ Could not decode transferFrom params: ${e.message}`);
+          }
+        }
+
         // TARGETED FILTERING: Only process transactions we care about
         const isDirectlyInvolved = tx.from?.toLowerCase() === safeAddr || tx.to?.toLowerCase() === safeAddr;
 
@@ -869,6 +886,7 @@ if (require.main === module) {
     chainId: parseInt(process.env.CHAIN_ID) || 137,
     dryRun: process.env.DRY_RUN === "true",
     debug: process.env.DEBUG === "true",
+    verbose: process.env.VERBOSE === "true",
     emergencyGasMult: parseFloat(process.env.EMERGENCY_GAS_MULTIPLIER) || 3.5,
     gasPremium: parseFloat(process.env.GAS_PREMIUM) || 0.5,
     poolSize: parseInt(process.env.POOL_SIZE) || 5,
