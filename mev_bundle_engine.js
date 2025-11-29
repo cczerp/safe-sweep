@@ -94,7 +94,7 @@ class MEVBundleEngine {
       console.log(`Current block: ${currentBlock}`);
 
       console.log("🎯 Using Alchemy Bundles");
-      const result = await this.submitBundleViaAlchemy(ourSignedTx);
+      const result = await this.submitBundleViaAlchemy(ourSignedTx, currentBlock);
 
       const totalTime = Date.now() - startTime;
       console.log("\n✅ MEV BUNDLE SUBMITTED SUCCESSFULLY");
@@ -119,7 +119,7 @@ class MEVBundleEngine {
   /**
    * Submit bundle via Alchemy (for Polygon)
    */
-  async submitBundleViaAlchemy(signedTx) {
+  async submitBundleViaAlchemy(signedTx, currentBlock) {
     if (!this.alchemyApiKey) {
       throw new Error("Alchemy API key not configured");
     }
@@ -128,6 +128,10 @@ class MEVBundleEngine {
 
     try {
       const axios = require("axios");
+
+      // Calculate maxBlockNumber (current + 3 blocks)
+      const maxBlockNumber = "0x" + (currentBlock + 3).toString(16);
+      console.log(`   Max block number: ${currentBlock + 3} (${maxBlockNumber})`);
 
       // Alchemy's sendPrivateTransaction API
       const alchemyUrl = `https://polygon-mainnet.g.alchemy.com/v2/${this.alchemyApiKey}`;
@@ -139,10 +143,8 @@ class MEVBundleEngine {
         params: [
           {
             tx: signedTx,
-            maxBlockNumber: null, // Include ASAP
-            preferences: {
-              fast: true // Prioritize speed
-            }
+            maxBlockNumber: maxBlockNumber,
+            fast: true // Top-level parameter, not nested in preferences
           }
         ]
       }, {
@@ -169,6 +171,13 @@ class MEVBundleEngine {
 
     } catch (error) {
       console.error("   ❌ Alchemy bundle failed:", error.message);
+      if (error.response) {
+        console.error("      Status:", error.response.status);
+        console.error("      Response data:", JSON.stringify(error.response.data, null, 2));
+      }
+      if (error.request && !error.response) {
+        console.error("      No response received from Alchemy");
+      }
       this.stats.bundlesFailed++;
       throw error;
     }

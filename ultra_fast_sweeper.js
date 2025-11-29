@@ -149,7 +149,7 @@ class UltraFastSweeper {
    * SHOTGUN SUBMISSION: Send same transaction through ALL paths simultaneously
    * Returns as soon as first path succeeds and confirms transaction
    */
-  async shotgunBroadcast(signedTx, txType = "sweep", maxRetries = 2) {
+  async shotgunBroadcast(signedTx, txType = "sweep", maxRetries = 2, preSignedTxHash = null) {
     let lastError = null;
 
     for (let retry = 0; retry <= maxRetries; retry++) {
@@ -173,7 +173,10 @@ class UltraFastSweeper {
             return { source: "Primary RPC", result, time: Date.now() - startTime };
           })
           .catch((err) => {
-            console.log(`   ❌ Primary RPC failed: ${err.message.substring(0, 100)}`);
+            console.log(`   ❌ Primary RPC failed: ${err.message}`);
+            if (err.error && err.error.message) {
+              console.log(`      Error details: ${err.error.message}`);
+            }
             return null;
           });
         broadcastPromises.push(primaryPromise);
@@ -188,7 +191,10 @@ class UltraFastSweeper {
               return { source: `Backup RPC ${i + 1}`, result, time: Date.now() - startTime };
             })
             .catch((err) => {
-              console.log(`   ❌ Backup RPC ${i + 1} failed`);
+              console.log(`   ❌ Backup RPC ${i + 1} failed: ${err.message}`);
+              if (err.error && err.error.message) {
+                console.log(`      Error details: ${err.error.message}`);
+              }
               return null;
             });
           broadcastPromises.push(backupPromise);
@@ -227,6 +233,11 @@ class UltraFastSweeper {
 
         // If this was the last retry, throw the error
         if (retry === maxRetries) {
+          // Release the pre-signed transaction back to pool on final failure
+          if (preSignedTxHash) {
+            console.log("⚠️ All broadcast attempts failed, releasing transaction back to pool");
+            this.preSignedPool.releaseTransaction(preSignedTxHash);
+          }
           throw error;
         }
 
@@ -267,7 +278,8 @@ class UltraFastSweeper {
     }
 
     // Step 2: Shotgun broadcast (multi-path)
-    const txResponse = await this.shotgunBroadcast(preSigned.signedTx, "USDT");
+    // Pass pre-signed txHash so it can be released back to pool if broadcast fails
+    const txResponse = await this.shotgunBroadcast(preSigned.signedTx, "USDT", 2, preSigned.txHash);
 
     const totalTime = Date.now() - startTime;
     console.log(`\n✅ USDT SWEEP BROADCAST COMPLETE`);
@@ -307,7 +319,8 @@ class UltraFastSweeper {
       return { isDryRun: true };
     }
 
-    const txResponse = await this.shotgunBroadcast(preSigned.signedTx, "MATIC");
+    // Pass pre-signed txHash so it can be released back to pool if broadcast fails
+    const txResponse = await this.shotgunBroadcast(preSigned.signedTx, "MATIC", 2, preSigned.txHash);
 
     const totalTime = Date.now() - startTime;
     console.log(`\n✅ MATIC SWEEP BROADCAST COMPLETE`);
@@ -346,7 +359,8 @@ class UltraFastSweeper {
       return { isDryRun: true };
     }
 
-    const txResponse = await this.shotgunBroadcast(preSigned.signedTx, "TOKEN");
+    // Pass pre-signed txHash so it can be released back to pool if broadcast fails
+    const txResponse = await this.shotgunBroadcast(preSigned.signedTx, "TOKEN", 2, preSigned.txHash);
 
     const totalTime = Date.now() - startTime;
     console.log(`\n✅ TOKEN SWEEP BROADCAST COMPLETE`);
