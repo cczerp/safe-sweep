@@ -275,6 +275,25 @@ class UltimateDefenseMonitorV2 {
 
         const safeAddr = this.config.safeAddress.toLowerCase();
 
+        // ULTRA VERBOSE: Log EVERY transaction involving Safe address (even indirectly)
+        if (this.config.verbose) {
+          const involvesSafe =
+            tx.from?.toLowerCase() === safeAddr ||
+            tx.to?.toLowerCase() === safeAddr ||
+            (tx.data && tx.data.includes(safeAddr.slice(2))); // Check if Safe address is in data
+
+          if (involvesSafe) {
+            console.log(`\n🔍 ULTRA-VERBOSE: TX involving Safe detected in mempool:`);
+            console.log(`   Hash: ${tx.hash}`);
+            console.log(`   From: ${tx.from}`);
+            console.log(`   To: ${tx.to}`);
+            console.log(`   Data (first 200 chars): ${tx.data?.slice(0, 200)}...`);
+            console.log(`   Function sig: ${tx.data?.slice(0, 10)}`);
+            console.log(`   Gas Price: ${tx.gasPrice ? ethers.utils.formatUnits(tx.gasPrice, "gwei") : "N/A"} gwei`);
+            console.log(`   ---`);
+          }
+        }
+
         // SUPER VERBOSE: Log ALL transferFrom calls if verbose mode enabled
         if (this.config.verbose && tx.data && tx.data.slice(0, 10) === "0x23b872dd") {
           console.log(`\n🔍 VERBOSE: Found transferFrom() call:`);
@@ -364,7 +383,26 @@ class UltimateDefenseMonitorV2 {
       try {
         const block = await this.provider.getBlockWithTransactions(blockNumber);
         if (block && block.transactions) {
+          const safeAddr = this.config.safeAddress.toLowerCase();
+
           for (const tx of block.transactions) {
+            // VERBOSE: Log any transaction involving Safe found in block
+            if (this.config.verbose) {
+              const involvesSafe =
+                tx.from?.toLowerCase() === safeAddr ||
+                tx.to?.toLowerCase() === safeAddr ||
+                (tx.data && tx.data.includes && tx.data.includes(safeAddr.slice(2)));
+
+              if (involvesSafe) {
+                console.log(`\n📦 VERBOSE: TX involving Safe found in block ${blockNumber}:`);
+                console.log(`   Hash: ${tx.hash}`);
+                console.log(`   From: ${tx.from}`);
+                console.log(`   To: ${tx.to}`);
+                console.log(`   Function sig: ${tx.data?.slice(0, 10)}`);
+                console.log(`   Was this in mempool? ${this.detectedThreats.has(tx.hash) ? "✅ YES" : "❌ NO (too fast!)"}`);
+              }
+            }
+
             // Check if this transaction is a threat
             const threat = this.detectThreat(tx);
             if (threat && !this.detectedThreats.has(tx.hash)) {
