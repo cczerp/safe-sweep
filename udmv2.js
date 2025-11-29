@@ -67,6 +67,8 @@ class UltimateDefenseMonitorV2 {
     console.log(`  - Emergency Gas: ${this.config.emergencyGasMult}x`);
     console.log(`  - Gas Premium: +${(this.config.gasPremium || 0.5) * 100}%`);
     console.log(`  - MEV Bundles: ${this.config.enableMEVBundles !== false ? "✅ ENABLED" : "❌ Disabled"}`);
+    console.log(`  - Debug Mode: ${this.config.debug ? "✅ ENABLED" : "❌ Disabled"}`);
+    console.log(`  - Verbose Mode: ${this.config.verbose ? "✅ ENABLED (will log ALL Safe txs)" : "❌ Disabled"}`);
 
     // Setup providers
     console.log("\n📡 Connecting to network...");
