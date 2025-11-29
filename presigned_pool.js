@@ -274,6 +274,9 @@ class PreSignedTxPool {
   /**
    * Get the next available pre-signed transaction for USDT
    * Returns immediately - this is the speed advantage!
+   *
+   * IMPORTANT: If broadcast fails, call releaseTransaction() to mark it unused
+   * so it can be retried with the same nonce.
    */
   getNextUSDTTx() {
     const available = this.pools.usdt.find(tx => !tx.used);
@@ -287,6 +290,40 @@ class PreSignedTxPool {
     console.log(`⚡ Retrieved pre-signed USDT tx (nonce: ${available.nonce})`);
 
     return available;
+  }
+
+  /**
+   * Release a transaction back to the pool (mark as unused)
+   * Call this when a broadcast fails so the same nonce can be retried
+   */
+  releaseTransaction(txHash) {
+    // Check USDT pool
+    const usdtTx = this.pools.usdt.find(tx => tx.txHash === txHash);
+    if (usdtTx && usdtTx.used) {
+      usdtTx.used = false;
+      console.log(`🔄 Released USDT tx back to pool (nonce: ${usdtTx.nonce})`);
+      return true;
+    }
+
+    // Check MATIC pool
+    const maticTx = this.pools.matic.find(tx => tx.txHash === txHash);
+    if (maticTx && maticTx.used) {
+      maticTx.used = false;
+      console.log(`🔄 Released MATIC tx back to pool (nonce: ${maticTx.nonce})`);
+      return true;
+    }
+
+    // Check generic pools
+    for (const [token, pool] of this.pools.generic.entries()) {
+      const genericTx = pool.find(tx => tx.txHash === txHash);
+      if (genericTx && genericTx.used) {
+        genericTx.used = false;
+        console.log(`🔄 Released ${token} tx back to pool (nonce: ${genericTx.nonce})`);
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
