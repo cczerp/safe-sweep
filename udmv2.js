@@ -932,11 +932,11 @@ if (require.main === module) {
     dryRun: process.env.DRY_RUN === "true",
     debug: process.env.DEBUG === "true",
     verbose: process.env.VERBOSE === "true",
-    emergencyGasMult: parseFloat(process.env.EMERGENCY_GAS_MULTIPLIER) || 3.5,
+    emergencyGasMult: parseFloat(process.env.EMERGENCY_GAS_MULTIPLIER) || 10.0, // Increased from 3.5 to 10
     gasPremium: parseFloat(process.env.GAS_PREMIUM) || 0.5,
     poolSize: parseInt(process.env.POOL_SIZE) || 5,
     gasRefreshInterval: parseInt(process.env.GAS_REFRESH_INTERVAL) || 12000,
-    enableMEVBundles: process.env.ENABLE_MEV_BUNDLES !== "false", // Default ON
+    enableMEVBundles: process.env.ENABLE_MEV_BUNDLES === "true", // Disable by default for Polygon
     bundleTimeout: parseInt(process.env.BUNDLE_TIMEOUT) || 30,
     maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD) || 3,
     bundlePriorityFee: process.env.BUNDLE_PRIORITY_FEE

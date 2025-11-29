@@ -231,10 +231,33 @@ class UltraFastSweeper {
         lastError = error;
         console.error(`❌ Shotgun attempt ${retry + 1} failed: ${error.message}`);
 
+        // Check if error is due to gas price being too low
+        const isGasTooLow = error.message.includes("gas price below minimum") ||
+                            error.message.includes("gas tip cap") ||
+                            error.message.includes("insufficient");
+
+        if (isGasTooLow) {
+          console.log("⚠️ Gas price too low! Network gas prices have increased.");
+          console.log("🔄 Forcing pool regeneration with current gas prices...");
+
+          // Release the current transaction back to pool
+          if (preSignedTxHash) {
+            this.preSignedPool.releaseTransaction(preSignedTxHash);
+          }
+
+          // Force immediate pool regeneration
+          try {
+            await this.preSignedPool.forceRegenerate();
+            console.log("✅ Pool regenerated with fresh gas prices");
+          } catch (regenError) {
+            console.error("❌ Pool regeneration failed:", regenError.message);
+          }
+        }
+
         // If this was the last retry, throw the error
         if (retry === maxRetries) {
           // Release the pre-signed transaction back to pool on final failure
-          if (preSignedTxHash) {
+          if (preSignedTxHash && !isGasTooLow) { // Don't release if already released above
             console.log("⚠️ All broadcast attempts failed, releasing transaction back to pool");
             this.preSignedPool.releaseTransaction(preSignedTxHash);
           }
