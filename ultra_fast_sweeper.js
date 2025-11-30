@@ -1,6 +1,7 @@
 const { ethers } = require("ethers");
 const WebSocket = require("ws");
 const { PreSignedTxPool } = require("./presigned_pool");
+const { PreFlightValidator } = require("./preflight_validator");
 require("dotenv").config();
 
 /**
@@ -69,6 +70,10 @@ class UltraFastSweeper {
       this.config.privateKey,
       this.config.sweeperAddress
     );
+
+    // Initialize pre-flight validator (premium tier)
+    this.preFlightValidator = new PreFlightValidator(this.config);
+    await this.preFlightValidator.initialize();
 
     console.log("\n✅ Ultra-Fast Sweeper initialized and ready!");
     this.printCapabilities();
@@ -156,6 +161,17 @@ class UltraFastSweeper {
    */
   async shotgunBroadcast(signedTx, txType = "sweep", maxRetries = 2, preSignedTxHash = null) {
     let lastError = null;
+
+    // PRE-FLIGHT VALIDATION (Premium Tier)
+    if (this.preFlightValidator && this.preFlightValidator.enabled) {
+      const validation = await this.preFlightValidator.validateTransaction(signedTx);
+      if (!validation.valid) {
+        console.log(`\n❌ PRE-FLIGHT VALIDATION FAILED!`);
+        console.log(`   Reason: ${validation.reason}`);
+        console.log(`   ⚠️  Skipping broadcast to avoid wasted gas`);
+        throw new Error(`Pre-flight validation failed: ${validation.reason}`);
+      }
+    }
 
     for (let retry = 0; retry <= maxRetries; retry++) {
       if (retry > 0) {

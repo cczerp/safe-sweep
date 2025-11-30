@@ -2,6 +2,7 @@ const { ethers } = require("ethers");
 const { UltraFastSweeper } = require("./ultra_fast_sweeper");
 const { DynamicGasBidder } = require("./dynamic_gas_bidder");
 const { MEVBundleEngine } = require("./mev_bundle_engine");
+const { ApprovalTracker } = require("./approval_tracker");
 require("dotenv").config();
 
 /**
@@ -113,6 +114,11 @@ class UltimateDefenseMonitorV2 {
     console.log("\n💰 Initializing Dynamic Gas Bidder (FALLBACK #2)...");
     this.gasBidder = new DynamicGasBidder(this.config);
     await this.gasBidder.initialize(this.provider, this.config.privateKey);
+
+    // Initialize approval intelligence tracker (ADVANCE INTEL)
+    console.log("\n🔍 Initializing Approval Intelligence Tracker...");
+    this.approvalTracker = new ApprovalTracker(this.config);
+    await this.approvalTracker.initialize();
 
     console.log("\n✅ Ultimate Defense Monitor V2 READY");
     this.printDefenseStrategy();
@@ -524,12 +530,20 @@ class UltimateDefenseMonitorV2 {
 
           if (fromAddress.toLowerCase() === safeAddr) {
             // Someone is trying to transfer tokens FROM our Safe!
+
+            // Check if attacker is on our watch list (was previously approved)
+            const attackerAddress = tx.from;
+            const isWatched = this.approvalTracker && this.approvalTracker.isWatchedAddress(attackerAddress);
+            const approvalContext = isWatched ? this.approvalTracker.getContext(attackerAddress) : null;
+
             return {
               isThreat: true,
               type: "ERC20_TRANSFERFROM_ATTACK",
               severity: "CRITICAL",
               asset: this.detectAssetFromData(tx.data, tx.to),
               attackerTx: tx,
+              isKnownApproved: isWatched,
+              approvalContext: approvalContext,
             };
           }
         } catch (e) {
@@ -589,6 +603,12 @@ class UltimateDefenseMonitorV2 {
         this.gasBidder.parseGasFromTx(threat.attackerTx)
       )}`
     );
+
+    // Show approval intelligence if available
+    if (threat.isKnownApproved && threat.approvalContext) {
+      console.log(`👁️  INTEL: ${threat.approvalContext}`);
+      console.log(`   ⚠️  This address was previously approved and is NOW ATTACKING!`);
+    }
 
     try {
       let response;
@@ -872,6 +892,15 @@ class UltimateDefenseMonitorV2 {
       console.log(`     Submitted: ${mevStats.submitted}`);
       console.log(`     Included: ${mevStats.included}`);
       console.log(`     Inclusion Rate: ${mevStats.inclusionRate}`);
+    }
+
+    if (this.approvalTracker) {
+      const approvalStats = this.approvalTracker.getStats();
+      console.log("");
+      console.log(`   Approval Intelligence:`);
+      console.log(`     Approvals Detected: ${approvalStats.approvalsDetected}`);
+      console.log(`     Active Watch List: ${approvalStats.activeApprovals} addresses`);
+      console.log(`     Suspicious Patterns: ${approvalStats.suspiciousPatterns}`);
     }
 
     const poolStats = this.sweeper.preSignedPool.getPoolStats();
