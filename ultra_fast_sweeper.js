@@ -83,9 +83,10 @@ class UltraFastSweeper {
     console.log("\n🔫 Setting up shotgun submission providers...");
 
     const backupRpcs = [
-      this.config.quicknodeHttp,
       this.config.alchemyHttp,
       this.config.infuraHttp,
+      this.config.drpcHttp,      // dRPC with MEV protection
+      this.config.quicknodeHttp,
       this.config.ankrHttp,
       this.config.nodiesHttp,
     ].filter(Boolean); // Remove undefined/null
@@ -97,7 +98,11 @@ class UltraFastSweeper {
         const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
         await provider.getNetwork(); // Test connection
         this.backupProviders.push(provider);
-        console.log(`   ✅ Added backup: ${rpcUrl.substring(0, 50)}...`);
+
+        // Identify dRPC for logging
+        const isDrpc = rpcUrl.includes('drpc');
+        const label = isDrpc ? '(MEV Protected)' : '';
+        console.log(`   ✅ Added backup ${label}: ${rpcUrl.substring(0, 50)}...`);
       } catch (error) {
         console.log(`   ⚠️ Skipped failed RPC: ${rpcUrl.substring(0, 50)}...`);
       }

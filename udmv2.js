@@ -922,6 +922,7 @@ if (require.main === module) {
     alchemyWss: process.env.ALCHEMY_WSS,
     alchemyApiKey: process.env.ALCHEMY_API_KEY,
     infuraHttp: process.env.INFURA_HTTP,
+    drpcHttp: process.env.DRPC_HTTP, // dRPC with MEV protection for Polygon
     ankrHttp: process.env.ANKR_HTTP,
     nodiesHttp: process.env.NODIES_HTTP,
     privateKey: process.env.PRIVATE_KEY,
