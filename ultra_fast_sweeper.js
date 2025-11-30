@@ -252,17 +252,22 @@ class UltraFastSweeper {
         lastError = error;
         console.error(`❌ Shotgun attempt ${retry + 1} failed: ${error.message}`);
 
+        // Get full error message (check nested error structures)
+        const fullErrorMsg = error.message +
+                            (error.error?.message || '') +
+                            (error.body || '');
+
         // Check if error is due to gas price being too low
-        const isGasTooLow = error.message.includes("gas price below minimum") ||
-                            error.message.includes("gas tip cap") ||
-                            error.message.includes("insufficient");
+        const isGasTooLow = fullErrorMsg.includes("gas price below minimum") ||
+                            fullErrorMsg.includes("gas tip cap") ||
+                            fullErrorMsg.includes("insufficient");
 
         if (isGasTooLow) {
           console.log("⚠️ Gas price too low! Network gas prices have increased.");
 
-          // Parse required gas from error message
+          // Parse required gas from error message (check all error locations)
           // Error format: "gas tip cap 5250000000, minimum needed 25000000000"
-          const minNeededMatch = error.message.match(/minimum needed (\d+)/);
+          const minNeededMatch = fullErrorMsg.match(/minimum needed (\d+)/);
           let requiredTip = null;
 
           if (minNeededMatch) {
@@ -270,6 +275,8 @@ class UltraFastSweeper {
             const requiredGwei = (parseInt(requiredTip) / 1e9).toFixed(2);
             console.log(`   📊 Network requires: ${requiredGwei} gwei minimum`);
             console.log(`   🎯 Regenerating with 2x safety margin: ${(requiredGwei * 2).toFixed(2)} gwei`);
+          } else {
+            console.log(`   ⚠️  Could not parse required gas from error, using current network prices`);
           }
 
           // Release the current transaction back to pool
@@ -279,7 +286,7 @@ class UltraFastSweeper {
 
           // Force immediate pool regeneration with required gas
           try {
-            console.log("🔄 Forcing pool regeneration with current network gas prices...");
+            console.log("🔄 Forcing pool regeneration with network gas prices...");
             await this.preSignedPool.forceRegenerateWithGas(requiredTip);
             console.log("✅ Pool regenerated with fresh gas prices");
           } catch (regenError) {

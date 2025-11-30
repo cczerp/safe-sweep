@@ -74,14 +74,19 @@ class PreSignedTxPool {
       }
     }
 
-    try {
-      await this.generateMATICPool();
-    } catch (error) {
-      if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC")) {
-        console.log("   ℹ️ No MATIC in Safe yet - pool will generate when tokens detected");
-      } else {
-        console.warn(`   ⚠️ Could not generate MATIC pool: ${error.message}`);
+    // Only generate MATIC pool if enabled in config
+    if (this.config.sweepMatic !== false) {
+      try {
+        await this.generateMATICPool();
+      } catch (error) {
+        if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC")) {
+          console.log("   ℹ️ No MATIC in Safe yet - pool will generate when tokens detected");
+        } else {
+          console.warn(`   ⚠️ Could not generate MATIC pool: ${error.message}`);
+        }
       }
+    } else {
+      console.log("   ⚠️ MATIC sweeping disabled (SWEEP_MATIC=false) - saving gas");
     }
 
     console.log("✅ Pre-signed pool initialized (ready when tokens are present)");
@@ -383,11 +388,11 @@ class PreSignedTxPool {
 
     // Trigger regeneration if:
     // 1. Nonce has advanced (transactions confirmed)
-    // 2. Pool is more than 50% depleted
+    // 2. Pool is more than 50% depleted (only check MATIC if enabled)
     const needsRegeneration =
       currentNonce > this.baseNonce ||
       usdtAvailable <= this.poolSize / 2 ||
-      maticAvailable <= this.poolSize / 2;
+      (this.config.sweepMatic !== false && maticAvailable <= this.poolSize / 2);
 
     if (needsRegeneration) {
       if (currentNonce > this.baseNonce) {
@@ -409,14 +414,16 @@ class PreSignedTxPool {
         }
       }
 
-      // Regenerate MATIC pool (skip if no tokens)
-      try {
-        await this.generateMATICPool();
-      } catch (error) {
-        if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC") || error.message.includes("execution reverted")) {
-          console.log("   ℹ️ Skipping MATIC pool (no tokens in Safe)");
-        } else {
-          console.warn(`   ⚠️ Could not regenerate MATIC pool: ${error.message.substring(0, 100)}`);
+      // Regenerate MATIC pool (only if enabled and skip if no tokens)
+      if (this.config.sweepMatic !== false) {
+        try {
+          await this.generateMATICPool();
+        } catch (error) {
+          if (error.message.includes("No tokens to sweep") || error.message.includes("No MATIC") || error.message.includes("execution reverted")) {
+            console.log("   ℹ️ Skipping MATIC pool (no tokens in Safe)");
+          } else {
+            console.warn(`   ⚠️ Could not regenerate MATIC pool: ${error.message.substring(0, 100)}`);
+          }
         }
       }
 
@@ -511,7 +518,10 @@ class PreSignedTxPool {
     );
 
     await this.generateUSDTPool();
-    await this.generateMATICPool();
+
+    if (this.config.sweepMatic !== false) {
+      await this.generateMATICPool();
+    }
 
     for (const [tokenAddress, _] of this.pools.generic.entries()) {
       await this.generateTokenPool(tokenAddress);
@@ -565,7 +575,10 @@ class PreSignedTxPool {
 
       // Regenerate pools with overridden gas function
       await this.generateUSDTPool();
-      await this.generateMATICPool();
+
+      if (this.config.sweepMatic !== false) {
+        await this.generateMATICPool();
+      }
 
       for (const [tokenAddress, _] of this.pools.generic.entries()) {
         await this.generateTokenPool(tokenAddress);
@@ -576,7 +589,10 @@ class PreSignedTxPool {
     } else {
       // No required gas specified, use normal regeneration
       await this.generateUSDTPool();
-      await this.generateMATICPool();
+
+      if (this.config.sweepMatic !== false) {
+        await this.generateMATICPool();
+      }
 
       for (const [tokenAddress, _] of this.pools.generic.entries()) {
         await this.generateTokenPool(tokenAddress);
