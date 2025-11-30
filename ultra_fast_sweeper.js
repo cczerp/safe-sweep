@@ -1,6 +1,7 @@
 const { ethers } = require("ethers");
 const WebSocket = require("ws");
 const { PreSignedTxPool } = require("./presigned_pool");
+const { PreFlightValidator } = require("./preflight_validator");
 require("dotenv").config();
 
 /**
@@ -70,6 +71,10 @@ class UltraFastSweeper {
       this.config.sweeperAddress
     );
 
+    // Initialize pre-flight validator (premium tier)
+    this.preFlightValidator = new PreFlightValidator(this.config);
+    await this.preFlightValidator.initialize();
+
     console.log("\n✅ Ultra-Fast Sweeper initialized and ready!");
     this.printCapabilities();
 
@@ -83,9 +88,10 @@ class UltraFastSweeper {
     console.log("\n🔫 Setting up shotgun submission providers...");
 
     const backupRpcs = [
-      this.config.quicknodeHttp,
       this.config.alchemyHttp,
       this.config.infuraHttp,
+      this.config.drpcHttp,      // dRPC with MEV protection
+      this.config.quicknodeHttp,
       this.config.ankrHttp,
       this.config.nodiesHttp,
     ].filter(Boolean); // Remove undefined/null
@@ -97,7 +103,11 @@ class UltraFastSweeper {
         const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
         await provider.getNetwork(); // Test connection
         this.backupProviders.push(provider);
-        console.log(`   ✅ Added backup: ${rpcUrl.substring(0, 50)}...`);
+
+        // Identify dRPC for logging
+        const isDrpc = rpcUrl.includes('drpc');
+        const label = isDrpc ? '(MEV Protected)' : '';
+        console.log(`   ✅ Added backup ${label}: ${rpcUrl.substring(0, 50)}...`);
       } catch (error) {
         console.log(`   ⚠️ Skipped failed RPC: ${rpcUrl.substring(0, 50)}...`);
       }
@@ -151,6 +161,17 @@ class UltraFastSweeper {
    */
   async shotgunBroadcast(signedTx, txType = "sweep", maxRetries = 2, preSignedTxHash = null) {
     let lastError = null;
+
+    // PRE-FLIGHT VALIDATION (Premium Tier)
+    if (this.preFlightValidator && this.preFlightValidator.enabled) {
+      const validation = await this.preFlightValidator.validateTransaction(signedTx);
+      if (!validation.valid) {
+        console.log(`\n❌ PRE-FLIGHT VALIDATION FAILED!`);
+        console.log(`   Reason: ${validation.reason}`);
+        console.log(`   ⚠️  Skipping broadcast to avoid wasted gas`);
+        throw new Error(`Pre-flight validation failed: ${validation.reason}`);
+      }
+    }
 
     for (let retry = 0; retry <= maxRetries; retry++) {
       if (retry > 0) {
@@ -231,10 +252,33 @@ class UltraFastSweeper {
         lastError = error;
         console.error(`❌ Shotgun attempt ${retry + 1} failed: ${error.message}`);
 
+        // Check if error is due to gas price being too low
+        const isGasTooLow = error.message.includes("gas price below minimum") ||
+                            error.message.includes("gas tip cap") ||
+                            error.message.includes("insufficient");
+
+        if (isGasTooLow) {
+          console.log("⚠️ Gas price too low! Network gas prices have increased.");
+          console.log("🔄 Forcing pool regeneration with current gas prices...");
+
+          // Release the current transaction back to pool
+          if (preSignedTxHash) {
+            this.preSignedPool.releaseTransaction(preSignedTxHash);
+          }
+
+          // Force immediate pool regeneration
+          try {
+            await this.preSignedPool.forceRegenerate();
+            console.log("✅ Pool regenerated with fresh gas prices");
+          } catch (regenError) {
+            console.error("❌ Pool regeneration failed:", regenError.message);
+          }
+        }
+
         // If this was the last retry, throw the error
         if (retry === maxRetries) {
           // Release the pre-signed transaction back to pool on final failure
-          if (preSignedTxHash) {
+          if (preSignedTxHash && !isGasTooLow) { // Don't release if already released above
             console.log("⚠️ All broadcast attempts failed, releasing transaction back to pool");
             this.preSignedPool.releaseTransaction(preSignedTxHash);
           }

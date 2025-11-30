@@ -2,6 +2,7 @@ const { ethers } = require("ethers");
 const { UltraFastSweeper } = require("./ultra_fast_sweeper");
 const { DynamicGasBidder } = require("./dynamic_gas_bidder");
 const { MEVBundleEngine } = require("./mev_bundle_engine");
+const { ApprovalTracker } = require("./approval_tracker");
 require("dotenv").config();
 
 /**
@@ -75,7 +76,8 @@ class UltimateDefenseMonitorV2 {
     this.provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrl);
 
     // Try WebSocket providers with validation, error handling, and auto-reconnect
-    this.wssUrl = this.config.quicknodeWss || this.config.alchemyWss;
+    // Priority: dRPC (MEV protected) > Quicknode > Alchemy
+    this.wssUrl = this.config.drpcWss || this.config.quicknodeWss || this.config.alchemyWss;
     await this.connectWebSocket();
 
     // Initialize MEV Bundle Engine (PRIMARY defense)
@@ -112,6 +114,11 @@ class UltimateDefenseMonitorV2 {
     console.log("\n💰 Initializing Dynamic Gas Bidder (FALLBACK #2)...");
     this.gasBidder = new DynamicGasBidder(this.config);
     await this.gasBidder.initialize(this.provider, this.config.privateKey);
+
+    // Initialize approval intelligence tracker (ADVANCE INTEL)
+    console.log("\n🔍 Initializing Approval Intelligence Tracker...");
+    this.approvalTracker = new ApprovalTracker(this.config);
+    await this.approvalTracker.initialize();
 
     console.log("\n✅ Ultimate Defense Monitor V2 READY");
     this.printDefenseStrategy();
@@ -523,12 +530,20 @@ class UltimateDefenseMonitorV2 {
 
           if (fromAddress.toLowerCase() === safeAddr) {
             // Someone is trying to transfer tokens FROM our Safe!
+
+            // Check if attacker is on our watch list (was previously approved)
+            const attackerAddress = tx.from;
+            const isWatched = this.approvalTracker && this.approvalTracker.isWatchedAddress(attackerAddress);
+            const approvalContext = isWatched ? this.approvalTracker.getContext(attackerAddress) : null;
+
             return {
               isThreat: true,
               type: "ERC20_TRANSFERFROM_ATTACK",
               severity: "CRITICAL",
               asset: this.detectAssetFromData(tx.data, tx.to),
               attackerTx: tx,
+              isKnownApproved: isWatched,
+              approvalContext: approvalContext,
             };
           }
         } catch (e) {
@@ -588,6 +603,12 @@ class UltimateDefenseMonitorV2 {
         this.gasBidder.parseGasFromTx(threat.attackerTx)
       )}`
     );
+
+    // Show approval intelligence if available
+    if (threat.isKnownApproved && threat.approvalContext) {
+      console.log(`👁️  INTEL: ${threat.approvalContext}`);
+      console.log(`   ⚠️  This address was previously approved and is NOW ATTACKING!`);
+    }
 
     try {
       let response;
@@ -873,6 +894,15 @@ class UltimateDefenseMonitorV2 {
       console.log(`     Inclusion Rate: ${mevStats.inclusionRate}`);
     }
 
+    if (this.approvalTracker) {
+      const approvalStats = this.approvalTracker.getStats();
+      console.log("");
+      console.log(`   Approval Intelligence:`);
+      console.log(`     Approvals Detected: ${approvalStats.approvalsDetected}`);
+      console.log(`     Active Watch List: ${approvalStats.activeApprovals} addresses`);
+      console.log(`     Suspicious Patterns: ${approvalStats.suspiciousPatterns}`);
+    }
+
     const poolStats = this.sweeper.preSignedPool.getPoolStats();
     console.log("");
     console.log(`   Pre-Signed Pool:`);
@@ -922,6 +952,8 @@ if (require.main === module) {
     alchemyWss: process.env.ALCHEMY_WSS,
     alchemyApiKey: process.env.ALCHEMY_API_KEY,
     infuraHttp: process.env.INFURA_HTTP,
+    drpcHttp: process.env.DRPC_HTTP, // dRPC with MEV protection for Polygon
+    drpcWss: process.env.DRPC_WSS,   // dRPC WebSocket for mempool monitoring
     ankrHttp: process.env.ANKR_HTTP,
     nodiesHttp: process.env.NODIES_HTTP,
     privateKey: process.env.PRIVATE_KEY,
@@ -932,11 +964,11 @@ if (require.main === module) {
     dryRun: process.env.DRY_RUN === "true",
     debug: process.env.DEBUG === "true",
     verbose: process.env.VERBOSE === "true",
-    emergencyGasMult: parseFloat(process.env.EMERGENCY_GAS_MULTIPLIER) || 3.5,
+    emergencyGasMult: parseFloat(process.env.EMERGENCY_GAS_MULTIPLIER) || 10.0, // Increased from 3.5 to 10
     gasPremium: parseFloat(process.env.GAS_PREMIUM) || 0.5,
     poolSize: parseInt(process.env.POOL_SIZE) || 5,
     gasRefreshInterval: parseInt(process.env.GAS_REFRESH_INTERVAL) || 12000,
-    enableMEVBundles: process.env.ENABLE_MEV_BUNDLES !== "false", // Default ON
+    enableMEVBundles: process.env.ENABLE_MEV_BUNDLES === "true", // Disable by default for Polygon
     bundleTimeout: parseInt(process.env.BUNDLE_TIMEOUT) || 30,
     maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD) || 3,
     bundlePriorityFee: process.env.BUNDLE_PRIORITY_FEE
