@@ -519,6 +519,72 @@ class PreSignedTxPool {
 
     console.log("✅ Force regeneration complete");
   }
+
+  /**
+   * Force regeneration with specific minimum gas price (from error message)
+   * @param {string} requiredTipWei - Required priority fee in wei (as string) from error message
+   */
+  async forceRegenerateWithGas(requiredTipWei = null) {
+    console.log("🔄 Force regenerating pools with required gas...");
+
+    // Get fresh nonce
+    this.baseNonce = await this.provider.getTransactionCount(
+      this.signer.address,
+      "pending"
+    );
+
+    // If we have a required tip from error message, override getEmergencyGas
+    if (requiredTipWei) {
+      const requiredTip = ethers.BigNumber.from(requiredTipWei);
+      const safetyMargin = requiredTip.mul(2); // 2x safety margin
+
+      // Temporarily override getEmergencyGas to use required gas
+      const originalGetEmergencyGas = this.getEmergencyGas.bind(this);
+      this.getEmergencyGas = async () => {
+        const feeData = await this.provider.getFeeData();
+
+        // Use whichever is higher: network gas or required gas with safety margin
+        const networkTip = feeData.maxPriorityFeePerGas || ethers.BigNumber.from(0);
+        const useGas = safetyMargin.gt(networkTip) ? safetyMargin : networkTip;
+
+        if (feeData.maxFeePerGas) {
+          // EIP-1559 - use required gas with safety margin
+          return {
+            maxFeePerGas: useGas.mul(3), // 3x for maxFee (base + tip headroom)
+            maxPriorityFeePerGas: useGas,
+            type: 2,
+          };
+        } else {
+          // Legacy
+          return {
+            gasPrice: useGas.mul(2),
+            type: 0,
+          };
+        }
+      };
+
+      // Regenerate pools with overridden gas function
+      await this.generateUSDTPool();
+      await this.generateMATICPool();
+
+      for (const [tokenAddress, _] of this.pools.generic.entries()) {
+        await this.generateTokenPool(tokenAddress);
+      }
+
+      // Restore original function
+      this.getEmergencyGas = originalGetEmergencyGas;
+    } else {
+      // No required gas specified, use normal regeneration
+      await this.generateUSDTPool();
+      await this.generateMATICPool();
+
+      for (const [tokenAddress, _] of this.pools.generic.entries()) {
+        await this.generateTokenPool(tokenAddress);
+      }
+    }
+
+    console.log("✅ Force regeneration with required gas complete");
+  }
 }
 
 module.exports = { PreSignedTxPool };
