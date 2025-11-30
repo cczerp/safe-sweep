@@ -31,7 +31,8 @@ class MEVBundleEngine {
     // Bundle configuration
     this.bundleTimeout = config.bundleTimeout || 30; // seconds
     this.maxBlocksAhead = config.maxBlocksAhead || 2; // try to include in next 2 blocks (Marlin default)
-    this.bundlePriorityFee = config.bundlePriorityFee || ethers.utils.parseUnits("50", "gwei");
+    // Polygon: Use 200 gwei for aggressive bundle inclusion (emergency tip)
+    this.bundlePriorityFee = config.bundlePriorityFee || ethers.utils.parseUnits("200", "gwei");
 
     // Statistics
     this.stats = {

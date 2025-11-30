@@ -1,4 +1,5 @@
 const { ethers } = require("ethers");
+const { PolygonGasCalculator } = require("./polygon_gas_calculator");
 
 /**
  * Pre-Signed Transaction Pool
@@ -96,26 +97,24 @@ class PreSignedTxPool {
   }
 
   /**
-   * Get current gas prices with emergency multiplier
+   * Get current gas prices with Polygon-specific rules
    */
   async getEmergencyGas() {
     const feeData = await this.provider.getFeeData();
-    const multiplier = this.config.emergencyGasMult || 3.5;
-
-    if (feeData.maxFeePerGas) {
-      // EIP-1559
-      return {
-        maxFeePerGas: feeData.maxFeePerGas.mul(Math.floor(multiplier * 100)).div(100),
-        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas.mul(Math.floor(multiplier * 100)).div(100),
-        type: 2,
-      };
-    } else {
-      // Legacy
-      return {
-        gasPrice: feeData.gasPrice.mul(Math.floor(multiplier * 100)).div(100),
-        type: 0,
-      };
+    
+    // Use Polygon gas calculator
+    if (!this.polygonGas) {
+      this.polygonGas = new PolygonGasCalculator({
+        minimumGasGwei: this.config.polygonMinimumGasGwei || 25,
+        baseTipGwei: this.config.polygonBaseTipGwei || 50,
+        congestedTipGwei: this.config.polygonCongestedTipGwei || 150,
+        aggressiveTipGwei: this.config.polygonAggressiveTipGwei || 200,
+        emergencyTipGwei: this.config.polygonEmergencyTipGwei || 200,
+      });
     }
+
+    // Get Polygon-appropriate emergency gas
+    return this.polygonGas.fromProviderFeeData(feeData, { emergency: true });
   }
 
   /**

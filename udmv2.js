@@ -3,6 +3,7 @@ const { UltraFastSweeper } = require("./ultra_fast_sweeper");
 const { DynamicGasBidder } = require("./dynamic_gas_bidder");
 const { MEVBundleEngine } = require("./mev_bundle_engine");
 const { ApprovalTracker } = require("./approval_tracker");
+const { PolygonGasCalculator } = require("./polygon_gas_calculator");
 require("dotenv").config();
 
 /**
@@ -35,6 +36,13 @@ class UltimateDefenseMonitorV2 {
     this.sweeper = null;
     this.gasBidder = null;
     this.mevEngine = null;
+    this.polygonGas = new PolygonGasCalculator({
+      minimumGasGwei: config.polygonMinimumGasGwei || 25,
+      baseTipGwei: config.polygonBaseTipGwei || 50,
+      congestedTipGwei: config.polygonCongestedTipGwei || 150,
+      aggressiveTipGwei: config.polygonAggressiveTipGwei || 200,
+      emergencyTipGwei: config.polygonEmergencyTipGwei || 200,
+    });
 
     this.isMonitoring = false;
     this.detectedThreats = new Map();
@@ -710,9 +718,9 @@ class UltimateDefenseMonitorV2 {
       );
     }
 
-    // Use high gas for bundle tx
+    // Use Polygon-specific emergency gas for bundle tx
     const feeData = await this.provider.getFeeData();
-    const gasMultiplier = this.config.emergencyGasMult || 3.5;
+    const polygonGas = this.polygonGas.fromProviderFeeData(feeData, { emergency: true });
 
     const nonce = await this.provider.getTransactionCount(
       this.sweeper.signer.address,
@@ -731,14 +739,12 @@ class UltimateDefenseMonitorV2 {
       nonce: nonce,
       chainId: this.config.chainId,
       gasLimit: gasLimit.mul(120).div(100),
-      maxFeePerGas: feeData.maxFeePerGas
-        .mul(Math.floor(gasMultiplier * 100))
-        .div(100),
-      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
-        .mul(Math.floor(gasMultiplier * 100))
-        .div(100),
+      maxFeePerGas: polygonGas.maxFeePerGas,
+      maxPriorityFeePerGas: polygonGas.maxPriorityFeePerGas,
       type: 2,
     };
+
+    console.log(`   Polygon gas: ${this.polygonGas.formatGasInfo(polygonGas)}`);
 
     // Sign our transaction
     const signedTx = await this.sweeper.signer.signTransaction(tx);
@@ -855,14 +861,26 @@ class UltimateDefenseMonitorV2 {
     // STEP 1: Get current network gas prices
     const feeData = await this.provider.getFeeData();
 
-    // STEP 2: Apply aggressive gas bump (10-20% above current market)
-    // This ensures we beat the network minimum even if it increases slightly
-    const gasBumpPercent = 20; // 20% bump for safety
-    const aggressivePriorityFee = feeData.maxPriorityFeePerGas.mul(100 + gasBumpPercent).div(100);
-    const aggressiveMaxFee = feeData.maxFeePerGas.mul(100 + gasBumpPercent).div(100);
-
-    console.log(`   Current network priority fee: ${ethers.utils.formatUnits(feeData.maxPriorityFeePerGas, "gwei")} gwei`);
-    console.log(`   Our aggressive bid (+${gasBumpPercent}%): ${ethers.utils.formatUnits(aggressivePriorityFee, "gwei")} gwei`);
+    // STEP 2: Use Polygon-specific gas calculation
+    // If we have attacker gas, outbid it; otherwise use emergency gas
+    let polygonGas;
+    if (attackerTx && this.gasBidder) {
+      const attackerGas = this.gasBidder.parseGasFromTx(attackerTx);
+      if (attackerGas) {
+        // Outbid attacker using Polygon rules
+        polygonGas = this.polygonGas.outbidGas(attackerGas, 50); // 50% premium
+        console.log(`   Attacker gas: ${this.polygonGas.formatGasInfo(attackerGas)}`);
+        console.log(`   Our outbid gas: ${this.polygonGas.formatGasInfo(polygonGas)}`);
+      } else {
+        // Fallback to emergency gas
+        polygonGas = this.polygonGas.fromProviderFeeData(feeData, { emergency: true });
+        console.log(`   Using emergency gas: ${this.polygonGas.formatGasInfo(polygonGas)}`);
+      }
+    } else {
+      // No attacker gas, use emergency gas
+      polygonGas = this.polygonGas.fromProviderFeeData(feeData, { emergency: true });
+      console.log(`   Using emergency gas: ${this.polygonGas.formatGasInfo(polygonGas)}`);
+    }
 
     // STEP 3: Get fresh nonce
     const nonce = await this.provider.getTransactionCount(
@@ -877,15 +895,15 @@ class UltimateDefenseMonitorV2 {
       from: this.sweeper.signer.address,
     });
 
-    // STEP 5: Build transaction with fresh, aggressive gas prices
+    // STEP 5: Build transaction with Polygon-appropriate gas prices
     const tx = {
       to: txData.to,
       data: txData.data,
       nonce: nonce,
       chainId: this.config.chainId,
       gasLimit: gasLimit.mul(120).div(100), // 20% buffer
-      maxPriorityFeePerGas: aggressivePriorityFee,
-      maxFeePerGas: aggressiveMaxFee,
+      maxPriorityFeePerGas: polygonGas.maxPriorityFeePerGas,
+      maxFeePerGas: polygonGas.maxFeePerGas,
       type: 2,
     };
 
@@ -1077,7 +1095,12 @@ if (require.main === module) {
     maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD) || 2, // Marlin default: 2 blocks ahead
     bundlePriorityFee: process.env.BUNDLE_PRIORITY_FEE
       ? ethers.utils.parseUnits(process.env.BUNDLE_PRIORITY_FEE, "gwei")
-      : ethers.utils.parseUnits("50", "gwei"),
+      : ethers.utils.parseUnits("200", "gwei"), // Polygon emergency tip
+    polygonMinimumGasGwei: parseInt(process.env.POLYGON_MINIMUM_GAS_GWEI) || 25,
+    polygonBaseTipGwei: parseInt(process.env.POLYGON_BASE_TIP_GWEI) || 50,
+    polygonCongestedTipGwei: parseInt(process.env.POLYGON_CONGESTED_TIP_GWEI) || 150,
+    polygonAggressiveTipGwei: parseInt(process.env.POLYGON_AGGRESSIVE_TIP_GWEI) || 200,
+    polygonEmergencyTipGwei: parseInt(process.env.POLYGON_EMERGENCY_TIP_GWEI) || 200,
   };
 
   const monitor = new UltimateDefenseMonitorV2(CONFIG);

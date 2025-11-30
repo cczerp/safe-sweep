@@ -1,4 +1,5 @@
 const { ethers } = require("ethers");
+const { PolygonGasCalculator } = require("./polygon_gas_calculator");
 
 /**
  * Dynamic Gas Bidder
@@ -24,8 +25,19 @@ class DynamicGasBidder {
     this.gasPremium = config.gasPremium || 0.5; // 50% above attacker
     this.maxGasPrice = config.maxGasPrice || ethers.utils.parseUnits("1000", "gwei"); // Safety limit
 
-    console.log("💰 Dynamic Gas Bidder initialized");
+    // Polygon gas calculator
+    this.polygonGas = new PolygonGasCalculator({
+      minimumGasGwei: config.polygonMinimumGasGwei || 25,
+      baseTipGwei: config.polygonBaseTipGwei || 50,
+      congestedTipGwei: config.polygonCongestedTipGwei || 150,
+      aggressiveTipGwei: config.polygonAggressiveTipGwei || 200,
+      emergencyTipGwei: config.polygonEmergencyTipGwei || 200,
+    });
+
+    console.log("💰 Dynamic Gas Bidder initialized (Polygon-optimized)");
     console.log(`   - Premium: +${(this.gasPremium * 100).toFixed(0)}% above attacker`);
+    console.log(`   - Polygon minimum: 25 gwei`);
+    console.log(`   - Base tip: 50 gwei, Emergency tip: 200 gwei`);
     console.log(
       `   - Max gas: ${ethers.utils.formatUnits(this.maxGasPrice, "gwei")} gwei`
     );
@@ -71,50 +83,31 @@ class DynamicGasBidder {
 
     const premium = Math.floor((1 + this.gasPremium) * 100);
 
-    if (attackerGas.type === 2) {
-      // EIP-1559
-      let maxFeePerGas = attackerGas.maxFeePerGas.mul(premium).div(100);
-      let maxPriorityFeePerGas = attackerGas.maxPriorityFeePerGas.mul(premium).div(100);
+    // Use Polygon-specific outbid logic
+    const outbidGas = this.polygonGas.outbidGas(attackerGas, this.gasPremium * 100);
 
-      // Apply safety limit
-      if (maxFeePerGas.gt(this.maxGasPrice)) {
-        console.warn(
-          `⚠️ Calculated gas ${ethers.utils.formatUnits(
-            maxFeePerGas,
-            "gwei"
-          )} gwei exceeds max, capping at ${ethers.utils.formatUnits(
-            this.maxGasPrice,
-            "gwei"
-          )} gwei`
-        );
-        maxFeePerGas = this.maxGasPrice;
-        maxPriorityFeePerGas = this.maxGasPrice.div(2); // Half of max for priority
-      }
-
-      return {
-        type: 2,
-        maxFeePerGas: maxFeePerGas,
-        maxPriorityFeePerGas: maxPriorityFeePerGas,
-      };
-    } else {
-      // Legacy
-      let gasPrice = attackerGas.gasPrice.mul(premium).div(100);
-
-      if (gasPrice.gt(this.maxGasPrice)) {
-        console.warn(
-          `⚠️ Calculated gas ${ethers.utils.formatUnits(
-            gasPrice,
-            "gwei"
-          )} gwei exceeds max, capping`
-        );
-        gasPrice = this.maxGasPrice;
-      }
-
-      return {
-        type: 0,
-        gasPrice: gasPrice,
-      };
+    // Apply safety limit
+    if (outbidGas.maxFeePerGas.gt(this.maxGasPrice)) {
+      console.warn(
+        `⚠️ Calculated gas ${ethers.utils.formatUnits(
+          outbidGas.maxFeePerGas,
+          "gwei"
+        )} gwei exceeds max, capping at ${ethers.utils.formatUnits(
+          this.maxGasPrice,
+          "gwei"
+        )} gwei`
+      );
+      // Cap but maintain Polygon minimum
+      const minGas = ethers.utils.parseUnits("25", "gwei");
+      outbidGas.maxFeePerGas = this.maxGasPrice.gt(minGas) ? this.maxGasPrice : minGas;
+      // Keep tip proportional but ensure minimum
+      const minTip = ethers.utils.parseUnits("50", "gwei");
+      outbidGas.maxPriorityFeePerGas = outbidGas.maxPriorityFeePerGas.gt(minTip) 
+        ? outbidGas.maxPriorityFeePerGas 
+        : minTip;
     }
+
+    return outbidGas;
   }
 
   /**
@@ -232,29 +225,16 @@ class DynamicGasBidder {
 
   /**
    * Get recommended gas for pre-signing (baseline competitive gas)
+   * Uses Polygon-specific gas rules
    */
   async getBaselineCompetitiveGas() {
     const feeData = await this.provider.getFeeData();
 
-    // Use a moderate multiplier for pre-signed txs (we'll outbid dynamically if needed)
-    const baseMultiplier = this.config.baseGasMult || 2.5;
-
-    if (feeData.maxFeePerGas) {
-      return {
-        type: 2,
-        maxFeePerGas: feeData.maxFeePerGas
-          .mul(Math.floor(baseMultiplier * 100))
-          .div(100),
-        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas
-          .mul(Math.floor(baseMultiplier * 100))
-          .div(100),
-      };
-    } else {
-      return {
-        type: 0,
-        gasPrice: feeData.gasPrice.mul(Math.floor(baseMultiplier * 100)).div(100),
-      };
-    }
+    // Use Polygon competitive gas (not emergency, but competitive)
+    return this.polygonGas.fromProviderFeeData(feeData, { 
+      emergency: false, 
+      congested: false 
+    });
   }
 
   /**
