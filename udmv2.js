@@ -643,13 +643,20 @@ class UltimateDefenseMonitorV2 {
       console.error("\n❌ THREAT RESPONSE FAILED:", error.message);
       console.error(`⏱️ Failed after ${Date.now() - startTime}ms`);
 
-      // EMERGENCY FALLBACK: Sweep everything
+      // EMERGENCY FALLBACK: Sweep configured assets
       console.log("🚨 EMERGENCY FALLBACK: Sweeping all assets...");
       try {
-        await Promise.all([
-          this.sweeper.emergencySweepUSDT(),
-          this.sweeper.emergencySweepMATIC(),
-        ]);
+        const sweepPromises = [];
+
+        // Always sweep USDT
+        sweepPromises.push(this.sweeper.emergencySweepUSDT());
+
+        // Only sweep MATIC if enabled (disabled by default to save gas)
+        if (this.config.sweepMatic !== false) {
+          sweepPromises.push(this.sweeper.emergencySweepMATIC());
+        }
+
+        await Promise.all(sweepPromises);
       } catch (fallbackError) {
         console.error("❌ Emergency fallback failed:", fallbackError.message);
       }
@@ -968,6 +975,7 @@ if (require.main === module) {
     gasPremium: parseFloat(process.env.GAS_PREMIUM) || 0.5,
     poolSize: parseInt(process.env.POOL_SIZE) || 5,
     gasRefreshInterval: parseInt(process.env.GAS_REFRESH_INTERVAL) || 12000,
+    sweepMatic: process.env.SWEEP_MATIC === "true", // Disabled by default to save gas
     enableMEVBundles: process.env.ENABLE_MEV_BUNDLES === "true", // Disable by default for Polygon
     bundleTimeout: parseInt(process.env.BUNDLE_TIMEOUT) || 30,
     maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD) || 3,
