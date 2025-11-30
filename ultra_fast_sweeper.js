@@ -259,16 +259,28 @@ class UltraFastSweeper {
 
         if (isGasTooLow) {
           console.log("⚠️ Gas price too low! Network gas prices have increased.");
-          console.log("🔄 Forcing pool regeneration with current gas prices...");
+
+          // Parse required gas from error message
+          // Error format: "gas tip cap 5250000000, minimum needed 25000000000"
+          const minNeededMatch = error.message.match(/minimum needed (\d+)/);
+          let requiredTip = null;
+
+          if (minNeededMatch) {
+            requiredTip = minNeededMatch[1]; // In wei as string
+            const requiredGwei = (parseInt(requiredTip) / 1e9).toFixed(2);
+            console.log(`   📊 Network requires: ${requiredGwei} gwei minimum`);
+            console.log(`   🎯 Regenerating with 2x safety margin: ${(requiredGwei * 2).toFixed(2)} gwei`);
+          }
 
           // Release the current transaction back to pool
           if (preSignedTxHash) {
             this.preSignedPool.releaseTransaction(preSignedTxHash);
           }
 
-          // Force immediate pool regeneration
+          // Force immediate pool regeneration with required gas
           try {
-            await this.preSignedPool.forceRegenerate();
+            console.log("🔄 Forcing pool regeneration with current network gas prices...");
+            await this.preSignedPool.forceRegenerateWithGas(requiredTip);
             console.log("✅ Pool regenerated with fresh gas prices");
           } catch (regenError) {
             console.error("❌ Pool regeneration failed:", regenError.message);
