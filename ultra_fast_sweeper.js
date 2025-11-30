@@ -88,7 +88,6 @@ class UltraFastSweeper {
     console.log("\n🔫 Setting up shotgun submission providers...");
 
     const backupRpcs = [
-      this.config.alchemyHttp,
       this.config.infuraHttp,
       this.config.drpcHttp,      // dRPC with MEV protection
       this.config.quicknodeHttp,

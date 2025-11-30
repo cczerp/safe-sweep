@@ -76,8 +76,8 @@ class UltimateDefenseMonitorV2 {
     this.provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrl);
 
     // Try WebSocket providers with validation, error handling, and auto-reconnect
-    // Priority: dRPC (MEV protected) > Quicknode > Alchemy
-    this.wssUrl = this.config.drpcWss || this.config.quicknodeWss || this.config.alchemyWss;
+    // Priority: dRPC (MEV protected) > Quicknode > Infura
+    this.wssUrl = this.config.drpcWss || this.config.quicknodeWss || this.config.infuraWss;
     await this.connectWebSocket();
 
     // Initialize MEV Bundle Engine (PRIMARY defense)
@@ -93,7 +93,7 @@ class UltimateDefenseMonitorV2 {
       await this.mevEngine.initialize(
         this.provider,
         this.config.privateKey,
-        this.config.alchemyApiKey
+        this.config.mevSearcherKey
       );
 
       if (this.mevEngine.canSubmitBundles()) {
@@ -455,8 +455,9 @@ class UltimateDefenseMonitorV2 {
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     if (this.mevEngine && this.mevEngine.canSubmitBundles()) {
-      console.log("   🥇 PRIMARY: MEV Bundles (Alchemy private transactions)");
-      console.log("      └─ Private transaction submission via Alchemy");
+      console.log("   🥇 PRIMARY: MEV Bundles (Marlin Relay)");
+      console.log("      └─ Bundle submission via Marlin Relay");
+      console.log("      └─ Guaranteed transaction ordering");
       console.log("      └─ Prevents front-running and sandwich attacks");
       console.log("");
       console.log("   🥈 FALLBACK: Real-Time Dynamic Gas Bidding");
@@ -469,7 +470,7 @@ class UltimateDefenseMonitorV2 {
       console.log("      └─ +20% aggressive gas bump above current market");
       console.log("      └─ Multi-RPC shotgun broadcast");
       console.log("");
-      console.log("   💡 TIP: Configure ALCHEMY_API_KEY for MEV bundle protection");
+      console.log("   💡 TIP: Configure MEV_SEARCHER_KEY for MEV bundle protection");
     }
 
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -617,9 +618,24 @@ class UltimateDefenseMonitorV2 {
 
       if (useMEVBundle) {
         console.log("\n🎯 DEFENSE STRATEGY: MEV BUNDLE (100% guaranteed)");
-        response = await this.defendWithMEVBundle(threat);
-        method = "MEV_BUNDLE";
-        this.stats.usedMEVBundles++;
+        try {
+          response = await this.defendWithMEVBundle(threat);
+          method = "MEV_BUNDLE";
+          this.stats.usedMEVBundles++;
+        } catch (bundleError) {
+          // Check if it's a network error (should fallback to shotgun)
+          if (bundleError.message && bundleError.message.includes("NETWORK_ERROR")) {
+            console.log("\n⚠️ Marlin Relay network error - falling back to shotgun broadcast");
+            console.log("   Error: " + bundleError.message);
+            response = await this.defendWithShotgun(threat);
+            method = response.method || "SHOTGUN_FALLBACK";
+          } else {
+            // Simulation failed or invalid bundle - stop the sweep
+            console.error("\n❌ Marlin bundle failed - simulation or validation error");
+            console.error("   Error: " + bundleError.message);
+            throw bundleError; // Re-throw to trigger emergency fallback
+          }
+        }
       } else {
         console.log("\n🎯 DEFENSE STRATEGY: Shotgun + Dynamic Bidding");
         response = await this.defendWithShotgun(threat);
@@ -728,9 +744,11 @@ class UltimateDefenseMonitorV2 {
     const signedTx = await this.sweeper.signer.signTransaction(tx);
 
     // Submit MEV bundle with our tx BEFORE attacker's
+    // Note: attackerTx is optional - we can bundle just our tx if attacker tx not available
+    const attackerTxRaw = threat.attackerTx?.raw || threat.attackerTx;
     const result = await this.mevEngine.guaranteedFrontRun(
       signedTx,
-      threat.attackerTx
+      attackerTxRaw
     );
 
     return result;
@@ -1031,18 +1049,17 @@ module.exports = { UltimateDefenseMonitorV2 };
 if (require.main === module) {
   const CONFIG = {
     sweeperAddress: process.env.SWEEPER_MODULE,
-    rpcUrl: process.env.ALCHEMY_HTTP || process.env.RPC_URL,
+    rpcUrl: process.env.DRPC_HTTP || process.env.QUICKNODE_HTTP || process.env.INFURA_HTTP || process.env.RPC_URL,
     quicknodeHttp: process.env.QUICKNODE_HTTP,
     quicknodeWss: process.env.QUICKNODE_WSS,
-    alchemyHttp: process.env.ALCHEMY_HTTP,
-    alchemyWss: process.env.ALCHEMY_WSS,
-    alchemyApiKey: process.env.ALCHEMY_API_KEY,
     infuraHttp: process.env.INFURA_HTTP,
+    infuraWss: process.env.INFURA_WSS,
     drpcHttp: process.env.DRPC_HTTP, // dRPC with MEV protection for Polygon
     drpcWss: process.env.DRPC_WSS,   // dRPC WebSocket for mempool monitoring
     ankrHttp: process.env.ANKR_HTTP,
     nodiesHttp: process.env.NODIES_HTTP,
     privateKey: process.env.PRIVATE_KEY,
+    mevSearcherKey: process.env.MEV_SEARCHER_KEY, // Searcher key for Marlin Relay
     vaultAddress: process.env.VAULT_ADDRESS,
     safeAddress: process.env.SAFE_ADDRESS,
     usdtContract: process.env.USDT_CONTRACT,
@@ -1057,7 +1074,7 @@ if (require.main === module) {
     sweepMatic: process.env.SWEEP_MATIC === "true", // Disabled by default to save gas
     enableMEVBundles: process.env.ENABLE_MEV_BUNDLES === "true", // Disable by default for Polygon
     bundleTimeout: parseInt(process.env.BUNDLE_TIMEOUT) || 30,
-    maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD) || 3,
+    maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD) || 2, // Marlin default: 2 blocks ahead
     bundlePriorityFee: process.env.BUNDLE_PRIORITY_FEE
       ? ethers.utils.parseUnits(process.env.BUNDLE_PRIORITY_FEE, "gwei")
       : ethers.utils.parseUnits("50", "gwei"),

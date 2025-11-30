@@ -1,5 +1,6 @@
 const { ethers } = require("ethers");
 const WebSocket = require("ws");
+const { MarlinRelay } = require("./marlin_relay");
 
 /**
  * MEV Bundle Engine for Polygon
@@ -9,8 +10,7 @@ const WebSocket = require("ws");
  * to ensure our tx executes FIRST in the same block.
  *
  * Supported Methods:
- * 1. BloxRoute bundles (blxr_submit_bundle)
- * 2. Direct builder submission (future)
+ * 1. Marlin Relay bundles (eth_sendBundle)
  *
  * Bundle Strategy:
  * - Include attacker's tx in bundle
@@ -26,10 +26,11 @@ class MEVBundleEngine {
 
     this.provider = null;
     this.signer = null;
+    this.marlinRelay = null;
 
     // Bundle configuration
     this.bundleTimeout = config.bundleTimeout || 30; // seconds
-    this.maxBlocksAhead = config.maxBlocksAhead || 3; // try to include in next 3 blocks
+    this.maxBlocksAhead = config.maxBlocksAhead || 2; // try to include in next 2 blocks (Marlin default)
     this.bundlePriorityFee = config.bundlePriorityFee || ethers.utils.parseUnits("50", "gwei");
 
     // Statistics
@@ -51,22 +52,23 @@ class MEVBundleEngine {
     );
   }
 
-  async initialize(provider, privateKey, alchemyApiKey = null) {
+  async initialize(provider, privateKey, searcherPrivateKey = null) {
     this.provider = provider;
     this.signer = new ethers.Wallet(privateKey, provider);
-    this.alchemyApiKey = alchemyApiKey;
 
     console.log("🔧 MEV Bundle Engine Configuration:");
     console.log("   - Wallet: " + this.signer.address);
 
-    // Setup Alchemy bundles (for Polygon)
-    if (alchemyApiKey) {
-      console.log("   - Alchemy Bundles: ✅ Available");
-      this.alchemyBundlesAvailable = true;
+    // Setup Marlin Relay bundles (for Polygon)
+    if (searcherPrivateKey) {
+      this.marlinRelay = new MarlinRelay(this.config);
+      await this.marlinRelay.initialize(searcherPrivateKey);
+      console.log("   - Marlin Relay Bundles: ✅ Available");
+      this.marlinBundlesAvailable = true;
     } else {
-      console.log("   - Alchemy Bundles: ❌ Not configured");
-      console.log("   ⚠️ MEV bundles disabled - configure ALCHEMY_API_KEY to enable");
-      this.alchemyBundlesAvailable = false;
+      console.log("   - Marlin Relay Bundles: ❌ Not configured");
+      console.log("   ⚠️ MEV bundles disabled - configure MEV_SEARCHER_KEY to enable");
+      this.marlinBundlesAvailable = false;
     }
 
     console.log("✅ MEV Bundle Engine ready");
@@ -76,16 +78,16 @@ class MEVBundleEngine {
    * MAIN METHOD: Create and submit bundle for guaranteed ordering
    *
    * This gives us 100% guarantee that our tx executes before attacker's
-   * Uses Alchemy bundles for Polygon
+   * Uses Marlin Relay bundles for Polygon
    */
-  async guaranteedFrontRun(ourSignedTx, attackerTx) {
+  async guaranteedFrontRun(ourSignedTx, attackerTx = null) {
     const startTime = Date.now();
 
     console.log("\n🎯 GUARANTEED FRONT-RUN WITH MEV BUNDLE");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     if (!this.canSubmitBundles()) {
-      throw new Error("No bundle service available - configure ALCHEMY_API_KEY to enable MEV bundles");
+      throw new Error("No bundle service available - configure MEV_SEARCHER_KEY to enable MEV bundles");
     }
 
     try {
@@ -93,92 +95,80 @@ class MEVBundleEngine {
       const currentBlock = await this.provider.getBlockNumber();
       console.log(`Current block: ${currentBlock}`);
 
-      console.log("🎯 Using Alchemy Bundles");
-      const result = await this.submitBundleViaAlchemy(ourSignedTx, currentBlock);
+      // Build bundle: our transaction first, then attacker's (if provided)
+      const bundleTxs = [ourSignedTx];
+      if (attackerTx && attackerTx.raw) {
+        bundleTxs.push(attackerTx.raw);
+      } else if (attackerTx && typeof attackerTx === "string") {
+        bundleTxs.push(attackerTx);
+      }
+
+      console.log("🎯 Using Marlin Relay Bundles");
+      const result = await this.submitBundleViaMarlin(bundleTxs, currentBlock);
 
       const totalTime = Date.now() - startTime;
       console.log("\n✅ MEV BUNDLE SUBMITTED SUCCESSFULLY");
       console.log(`   ⏱️ Total time: ${totalTime}ms`);
-      console.log(`   🎯 Private transaction submitted`);
-      console.log(`   📦 TX Hash: ${result.txHash || "pending"}`);
+      console.log(`   🎯 Bundle submitted to Marlin Relay`);
+      console.log(`   📦 Bundle Hash: ${result.bundleHash || "pending"}`);
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
       return {
         success: true,
-        txHash: result.txHash,
+        bundleHash: result.bundleHash,
+        txHash: result.bundleHash, // For compatibility
         submissionTime: totalTime,
       };
     } catch (error) {
       const totalTime = Date.now() - startTime;
       console.error(`\n❌ MEV BUNDLE FAILED after ${totalTime}ms`);
       console.error(`   Error: ${error.message}`);
+      
+      // Check if it's a network error (should trigger fallback)
+      if (error.message.includes("NETWORK_ERROR")) {
+        throw error; // Re-throw for fallback handling
+      }
+      
+      // Other errors (simulation failed, invalid bundle) should stop the sweep
       throw error;
     }
   }
 
   /**
-   * Submit bundle via Alchemy (for Polygon)
+   * Submit bundle via Marlin Relay (for Polygon)
    */
-  async submitBundleViaAlchemy(signedTx, currentBlock) {
-    if (!this.alchemyApiKey) {
-      throw new Error("Alchemy API key not configured");
+  async submitBundleViaMarlin(transactions, currentBlock) {
+    if (!this.marlinRelay) {
+      throw new Error("Marlin Relay not initialized - configure MEV_SEARCHER_KEY");
     }
 
-    console.log("\n🚀 SUBMITTING BUNDLE VIA ALCHEMY");
-
     try {
-      const axios = require("axios");
-
-      // Calculate maxBlockNumber (current + 3 blocks)
-      const maxBlockNumber = "0x" + (currentBlock + 3).toString(16);
-      console.log(`   Max block number: ${currentBlock + 3} (${maxBlockNumber})`);
-
-      // Alchemy's sendPrivateTransaction API
-      const alchemyUrl = `https://polygon-mainnet.g.alchemy.com/v2/${this.alchemyApiKey}`;
-
-      const response = await axios.post(alchemyUrl, {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_sendPrivateTransaction",
-        params: [
-          {
-            tx: signedTx,
-            maxBlockNumber: maxBlockNumber,
-            fast: true // Top-level parameter, not nested in preferences
-          }
-        ]
-      }, {
-        headers: {
-          "Content-Type": "application/json"
-        },
-        timeout: 10000
-      });
-
-      if (response.data.error) {
-        throw new Error(`Alchemy error: ${response.data.error.message}`);
-      }
-
-      console.log("   ✅ Alchemy bundle submitted successfully");
-      console.log("   📊 TX Hash:", response.data.result);
+      // Submit bundle with simulation
+      // Target block: currentBlock + 2 (Marlin default)
+      const result = await this.marlinRelay.submitBundleWithSimulation(
+        transactions,
+        currentBlock,
+        this.maxBlocksAhead
+      );
 
       this.stats.bundlesSubmitted++;
 
       return {
         success: true,
-        txHash: response.data.result,
-        method: "alchemy"
+        bundleHash: result.bundleHash,
+        method: "marlin"
       };
 
     } catch (error) {
-      console.error("   ❌ Alchemy bundle failed:", error.message);
-      if (error.response) {
-        console.error("      Status:", error.response.status);
-        console.error("      Response data:", JSON.stringify(error.response.data, null, 2));
-      }
-      if (error.request && !error.response) {
-        console.error("      No response received from Alchemy");
-      }
+      console.error("   ❌ Marlin bundle failed:", error.message);
       this.stats.bundlesFailed++;
+      
+      // Re-throw network errors for fallback handling
+      if (error.message.includes("NETWORK_ERROR")) {
+        throw error;
+      }
+      
+      // Re-throw other errors (simulation failed, invalid bundle)
       throw error;
     }
   }
@@ -187,7 +177,7 @@ class MEVBundleEngine {
    * Check if bundle submission is available
    */
   canSubmitBundles() {
-    return this.alchemyBundlesAvailable;
+    return this.marlinBundlesAvailable;
   }
 
   /**
