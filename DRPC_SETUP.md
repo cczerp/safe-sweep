@@ -33,16 +33,32 @@ Visit: https://drpc.org
 
 ```bash
 # dRPC HTTP endpoint for MEV-protected Polygon transactions
-DRPC_HTTP=https://lb.drpc.org/ogrpc?network=polygon&dkey=YOUR_API_KEY_HERE
+# Client type: bor (recommended for Polygon - official client)
+DRPC_HTTP=https://lb.drpc.org/ogrpc?network=polygon&dkey=YOUR_API_KEY_HERE&client=bor
 
 # dRPC WebSocket for real-time mempool monitoring (RECOMMENDED)
-DRPC_WSS=wss://lb.drpc.org/ogws?network=polygon&dkey=YOUR_API_KEY_HERE
+DRPC_WSS=wss://lb.drpc.org/ogws?network=polygon&dkey=YOUR_API_KEY_HERE&client=bor
 ```
+
+**Client Type Options:**
+- `bor` - Official Polygon client (RECOMMENDED)
+  - Best compatibility with Polygon-specific features
+  - Access to bor_* methods (getCurrentProposer, getCurrentValidators, etc.)
+  - Most validators run Bor
+- `erigon` - Faster syncing, lower disk usage, good for archive queries
+- `nethermind` - .NET implementation, fast and efficient
+
+**Why Bor for Polygon?**
+- Native support for Polygon consensus
+- Access to validator/proposer information
+- Better MEV bundle routing (knows current block proposer)
+- Most compatible with Polygon's Heimdall + Bor architecture
 
 **Important:**
 - Use their load-balanced endpoints (`lb.drpc.org`) for best performance
 - WebSocket is **critical** for detecting pending transactions in the mempool
 - If you have dRPC WSS, it will be prioritized over other providers
+- Specifying `client=bor` ensures you're routing to Polygon-native nodes
 
 ### 3. Restart Monitor
 
@@ -228,8 +244,9 @@ await preFlightValidator.analyzeFailedTransaction(txHash);
 Add to `.env`:
 ```bash
 # dRPC Premium Tier (pay-as-you-go)
-DRPC_HTTP=https://lb.drpc.org/ogrpc?network=polygon&dkey=YOUR_API_KEY_HERE
-DRPC_WSS=wss://lb.drpc.org/ogws?network=polygon&dkey=YOUR_API_KEY_HERE
+# Use client=bor for Polygon (official client with best MEV routing)
+DRPC_HTTP=https://lb.drpc.org/ogrpc?network=polygon&dkey=YOUR_API_KEY_HERE&client=bor
+DRPC_WSS=wss://lb.drpc.org/ogws?network=polygon&dkey=YOUR_API_KEY_HERE&client=bor
 ```
 
 **Cost:** Pay-as-you-go pricing
