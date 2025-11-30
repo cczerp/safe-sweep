@@ -459,17 +459,15 @@ class UltimateDefenseMonitorV2 {
       console.log("      └─ Private transaction submission via Alchemy");
       console.log("      └─ Prevents front-running and sandwich attacks");
       console.log("");
-      console.log("   🥈 FALLBACK #1: Pre-Signed Pool + Shotgun");
-      console.log("      └─ If bundle submission fails");
-      console.log("");
-      console.log("   🥉 FALLBACK #2: Dynamic Gas Bidding");
-      console.log("      └─ If pool exhausted");
+      console.log("   🥈 FALLBACK: Real-Time Dynamic Gas Bidding");
+      console.log("      └─ Generate tx with LIVE gas prices on threat detection");
+      console.log("      └─ +20% aggressive gas bump above current market");
+      console.log("      └─ Shotgun broadcast to multiple RPCs");
     } else {
-      console.log("   🥇 PRIMARY: Pre-Signed Pool + Shotgun");
-      console.log("      └─ ~50ms response time");
-      console.log("");
-      console.log("   🥈 FALLBACK: Dynamic Gas Bidding");
-      console.log("      └─ Outbid attackers by 50%+");
+      console.log("   🥇 PRIMARY: Real-Time Dynamic Gas Bidding + Shotgun");
+      console.log("      └─ Generate tx with LIVE gas prices on threat detection");
+      console.log("      └─ +20% aggressive gas bump above current market");
+      console.log("      └─ Multi-RPC shotgun broadcast");
       console.log("");
       console.log("   💡 TIP: Configure ALCHEMY_API_KEY for MEV bundle protection");
     }
@@ -740,48 +738,42 @@ class UltimateDefenseMonitorV2 {
 
   /**
    * Defend using Shotgun + Dynamic Bidding (FALLBACK)
+   *
+   * CRITICAL FIX: Generate transactions in REAL-TIME with current gas prices
+   * Pre-signed pool transactions have stale gas prices and will be rejected
    */
   async defendWithShotgun(threat) {
     if (threat.asset === "USDT" || threat.asset === this.config.usdtContract) {
-      console.log("🎯 Initiating USDT defense (shotgun mode)...");
+      console.log("🎯 Initiating USDT defense (real-time dynamic gas)...");
 
-      const poolStats = this.sweeper.preSignedPool.getPoolStats();
-      const nextPreSigned = this.sweeper.preSignedPool.pools.usdt.find(
-        (tx) => !tx.used
-      );
-
-      if (nextPreSigned) {
-        console.log("⚡ Using pre-signed tx");
-        const result = await this.sweeper.emergencySweepUSDT();
-        this.stats.usedPreSigned++;
-        result.method = "PRE_SIGNED";
-        return result;
-      } else {
-        console.log("💰 Using dynamic bidding");
-        const result = await this.dynamicBidAndSweepUSDT(threat.attackerTx);
-        this.stats.usedDynamicGas++;
-        result.method = "DYNAMIC_GAS";
-        return result;
-      }
+      // ALWAYS use real-time transaction generation (never pre-signed pool)
+      // Pre-signed pool has stale gas prices that cause rejections
+      console.log("⚡ Building transaction with LIVE gas prices...");
+      const result = await this.dynamicBidAndSweepUSDT(threat.attackerTx);
+      this.stats.usedDynamicGas++;
+      result.method = "DYNAMIC_GAS_REALTIME";
+      return result;
     } else if (threat.asset === "MATIC") {
-      console.log("🎯 Initiating MATIC defense...");
-      const result = await this.sweeper.emergencySweepMATIC();
-      this.stats.usedPreSigned++;
-      result.method = "PRE_SIGNED";
+      console.log("🎯 Initiating MATIC defense (real-time dynamic gas)...");
+      console.log("⚡ Building transaction with LIVE gas prices...");
+      const result = await this.dynamicBidAndSweepMATIC(threat.attackerTx);
+      this.stats.usedDynamicGas++;
+      result.method = "DYNAMIC_GAS_REALTIME";
       return result;
     } else if (threat.asset !== "UNKNOWN") {
-      console.log(`🎯 Initiating defense for token ${threat.asset}...`);
-      const result = await this.sweeper.emergencySweepToken(threat.asset);
-      this.stats.usedPreSigned++;
-      result.method = "PRE_SIGNED";
+      console.log(`🎯 Initiating defense for token ${threat.asset} (real-time dynamic gas)...`);
+      console.log("⚡ Building transaction with LIVE gas prices...");
+      const result = await this.dynamicBidAndSweepToken(threat.asset, threat.attackerTx);
+      this.stats.usedDynamicGas++;
+      result.method = "DYNAMIC_GAS_REALTIME";
       return result;
     } else {
-      console.log("🎯 Unknown asset - sweeping ALL...");
+      console.log("🎯 Unknown asset - sweeping ALL with real-time gas...");
       await Promise.all([
-        this.sweeper.emergencySweepUSDT(),
-        this.sweeper.emergencySweepMATIC(),
+        this.dynamicBidAndSweepUSDT(threat.attackerTx),
+        this.config.sweepMatic !== false ? this.dynamicBidAndSweepMATIC(threat.attackerTx) : Promise.resolve(),
       ]);
-      return { method: "MULTI_SWEEP" };
+      return { method: "MULTI_SWEEP_REALTIME" };
     }
   }
 
@@ -796,10 +788,97 @@ class UltimateDefenseMonitorV2 {
       this.config.usdtContract
     );
 
-    const outbidTx = await this.gasBidder.buildOutbidTx(txData, attackerTx);
-    const result = await this.sweeper.shotgunBroadcast(outbidTx.signedTx, "USDT");
+    // Build transaction with LIVE gas data and aggressive bump
+    const tx = await this.buildRealTimeTransaction(txData, attackerTx);
+    const result = await this.sweeper.shotgunBroadcast(tx.signedTx, "USDT");
 
     return result;
+  }
+
+  async dynamicBidAndSweepMATIC(attackerTx) {
+    const sweeperContract = new ethers.Contract(
+      this.config.sweeperAddress,
+      ["function sweepAllMaticNow() external"],
+      this.sweeper.signer
+    );
+
+    const txData = await sweeperContract.populateTransaction.sweepAllMaticNow();
+
+    // Build transaction with LIVE gas data and aggressive bump
+    const tx = await this.buildRealTimeTransaction(txData, attackerTx);
+    const result = await this.sweeper.shotgunBroadcast(tx.signedTx, "MATIC");
+
+    return result;
+  }
+
+  async dynamicBidAndSweepToken(tokenAddress, attackerTx) {
+    const sweeperContract = new ethers.Contract(
+      this.config.sweeperAddress,
+      ["function sweepToken(address tokenAddress) external"],
+      this.sweeper.signer
+    );
+
+    const txData = await sweeperContract.populateTransaction.sweepToken(tokenAddress);
+
+    // Build transaction with LIVE gas data and aggressive bump
+    const tx = await this.buildRealTimeTransaction(txData, attackerTx);
+    const result = await this.sweeper.shotgunBroadcast(tx.signedTx, tokenAddress);
+
+    return result;
+  }
+
+  /**
+   * Build transaction with REAL-TIME gas data and aggressive bump
+   * This is the critical fix: fetch gas prices AT RESPONSE TIME, not from stale pool
+   */
+  async buildRealTimeTransaction(txData, attackerTx) {
+    console.log("📊 Fetching LIVE gas prices from network...");
+
+    // STEP 1: Get current network gas prices
+    const feeData = await this.provider.getFeeData();
+
+    // STEP 2: Apply aggressive gas bump (10-20% above current market)
+    // This ensures we beat the network minimum even if it increases slightly
+    const gasBumpPercent = 20; // 20% bump for safety
+    const aggressivePriorityFee = feeData.maxPriorityFeePerGas.mul(100 + gasBumpPercent).div(100);
+    const aggressiveMaxFee = feeData.maxFeePerGas.mul(100 + gasBumpPercent).div(100);
+
+    console.log(`   Current network priority fee: ${ethers.utils.formatUnits(feeData.maxPriorityFeePerGas, "gwei")} gwei`);
+    console.log(`   Our aggressive bid (+${gasBumpPercent}%): ${ethers.utils.formatUnits(aggressivePriorityFee, "gwei")} gwei`);
+
+    // STEP 3: Get fresh nonce
+    const nonce = await this.provider.getTransactionCount(
+      this.sweeper.signer.address,
+      "pending"
+    );
+
+    // STEP 4: Estimate gas limit
+    const gasLimit = await this.provider.estimateGas({
+      to: txData.to,
+      data: txData.data,
+      from: this.sweeper.signer.address,
+    });
+
+    // STEP 5: Build transaction with fresh, aggressive gas prices
+    const tx = {
+      to: txData.to,
+      data: txData.data,
+      nonce: nonce,
+      chainId: this.config.chainId,
+      gasLimit: gasLimit.mul(120).div(100), // 20% buffer
+      maxPriorityFeePerGas: aggressivePriorityFee,
+      maxFeePerGas: aggressiveMaxFee,
+      type: 2,
+    };
+
+    console.log(`   Transaction built with nonce ${nonce}`);
+
+    // STEP 6: Sign transaction
+    const signedTx = await this.sweeper.signer.signTransaction(tx);
+
+    console.log("✅ Real-time transaction ready for broadcast");
+
+    return { signedTx, tx };
   }
 
   logRaceResult(attackerHash, response, time, method) {
