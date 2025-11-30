@@ -75,7 +75,8 @@ class UltimateDefenseMonitorV2 {
     this.provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrl);
 
     // Try WebSocket providers with validation, error handling, and auto-reconnect
-    this.wssUrl = this.config.quicknodeWss || this.config.alchemyWss;
+    // Priority: dRPC (MEV protected) > Quicknode > Alchemy
+    this.wssUrl = this.config.drpcWss || this.config.quicknodeWss || this.config.alchemyWss;
     await this.connectWebSocket();
 
     // Initialize MEV Bundle Engine (PRIMARY defense)
@@ -923,6 +924,7 @@ if (require.main === module) {
     alchemyApiKey: process.env.ALCHEMY_API_KEY,
     infuraHttp: process.env.INFURA_HTTP,
     drpcHttp: process.env.DRPC_HTTP, // dRPC with MEV protection for Polygon
+    drpcWss: process.env.DRPC_WSS,   // dRPC WebSocket for mempool monitoring
     ankrHttp: process.env.ANKR_HTTP,
     nodiesHttp: process.env.NODIES_HTTP,
     privateKey: process.env.PRIVATE_KEY,

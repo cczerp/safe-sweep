@@ -32,11 +32,17 @@ Visit: https://drpc.org
 ### 2. Add to .env File
 
 ```bash
-# dRPC endpoint for MEV-protected Polygon transactions
+# dRPC HTTP endpoint for MEV-protected Polygon transactions
 DRPC_HTTP=https://lb.drpc.org/ogrpc?network=polygon&dkey=YOUR_API_KEY_HERE
+
+# dRPC WebSocket for real-time mempool monitoring (RECOMMENDED)
+DRPC_WSS=wss://lb.drpc.org/ogws?network=polygon&dkey=YOUR_API_KEY_HERE
 ```
 
-**Important:** Use their load-balanced endpoint for best performance.
+**Important:**
+- Use their load-balanced endpoints (`lb.drpc.org`) for best performance
+- WebSocket is **critical** for detecting pending transactions in the mempool
+- If you have dRPC WSS, it will be prioritized over other providers
 
 ### 3. Restart Monitor
 
@@ -46,6 +52,9 @@ DEBUG=true node udmv2.js
 
 You should see:
 ```
+📡 Connecting to network...
+   ✅ WebSocket connected: wss://lb.drpc.org/ogws?network=polygon... (MEV Protected)
+
 🔫 Setting up shotgun submission providers...
    ✅ Added backup (MEV Protected): https://lb.drpc.org/ogrpc?network=polygon...
    ✅ Added backup: https://polygon-mainnet.g.alchemy.com...
@@ -72,6 +81,21 @@ For production use, consider getting a **dedicated endpoint** from dRPC:
 - Higher rate limits
 - Better MEV protection
 
+## WebSocket Priority System
+
+The monitor uses WebSocket connections to detect pending transactions in real-time:
+
+**Priority Order:**
+1. **dRPC WSS** (if configured) - MEV-protected mempool monitoring
+2. **Quicknode WSS** - Fast mempool access
+3. **Alchemy WSS** - Standard mempool monitoring
+
+**Why dRPC WSS is prioritized:**
+- Monitors MEV-protected mempool channels
+- Better for detecting transactions that might bypass public mempool
+- Still sees all public transactions too
+- Lower latency to block builders
+
 ## Comparison: dRPC vs Standard RPC
 
 | Feature | dRPC | Standard RPC |
@@ -81,6 +105,7 @@ For production use, consider getting a **dedicated endpoint** from dRPC:
 | Speed | ~150-250ms | ~100-150ms |
 | Cost | Free tier available | Free tier available |
 | Best For | High-value txs | Speed-critical txs |
+| WebSocket Support | ✅ Yes | ✅ Yes |
 
 ## Recommended Strategy
 
