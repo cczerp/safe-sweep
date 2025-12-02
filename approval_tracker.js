@@ -66,8 +66,11 @@ class ApprovalTracker {
 
       console.log("   ✅ Approval tracker active");
 
-      // Also check historical approvals (last 1000 blocks)
+      // Check historical approvals (last ~2 days)
       await this.scanHistoricalApprovals();
+
+      // CRITICAL: Also check for current allowances to known risky addresses
+      await this.checkKnownRiskyAllowances();
 
       return true;
     } catch (error) {
@@ -79,9 +82,12 @@ class ApprovalTracker {
   async scanHistoricalApprovals() {
     try {
       const currentBlock = await this.provider.getBlockNumber();
-      const fromBlock = Math.max(0, currentBlock - 1000); // Last ~30 minutes on Polygon
+      // CRITICAL: Scan much more history - 100k blocks (~2 days on Polygon)
+      // Most approvals that will be exploited were granted recently
+      const fromBlock = Math.max(0, currentBlock - 100000);
 
       console.log(`   🔎 Scanning blocks ${fromBlock} to ${currentBlock} for existing approvals...`);
+      console.log(`   ⚠️  This covers ~2 days of history on Polygon`);
 
       const approvalTopic = ethers.utils.id("Approval(address,address,uint256)");
       const safeAddressPadded = ethers.utils.hexZeroPad(
@@ -103,6 +109,63 @@ class ApprovalTracker {
       }
     } catch (error) {
       console.error("   ⚠️  Historical scan failed:", error.message);
+    }
+  }
+
+  async checkKnownRiskyAllowances() {
+    try {
+      console.log(`   🔍 Checking current on-chain allowances for known risky addresses...`);
+
+      // Check allowances from approval events we found
+      // For each spender in our watch list, verify current allowance on-chain
+      const usdtContract = new ethers.Contract(
+        this.config.usdtContract,
+        ["function allowance(address owner, address spender) view returns (uint256)"],
+        this.provider
+      );
+
+      // Get all unique spenders from historical scan
+      const spendersToCheck = Array.from(this.watchList.keys());
+
+      if (spendersToCheck.length === 0) {
+        console.log(`   ℹ️  No historical approvals found to verify`);
+        return;
+      }
+
+      console.log(`   🔎 Verifying ${spendersToCheck.length} addresses...`);
+
+      for (const spender of spendersToCheck) {
+        try {
+          const allowance = await usdtContract.allowance(this.config.safeAddress, spender);
+
+          if (allowance.isZero()) {
+            // Allowance was revoked, remove from watch list
+            this.watchList.delete(spender);
+          } else {
+            // Update with current allowance
+            const existing = this.watchList.get(spender);
+            if (existing) {
+              existing.amount = allowance.toString();
+              existing.amountFormatted = ethers.utils.formatUnits(allowance, 6);
+            }
+          }
+        } catch (error) {
+          console.log(`   ⚠️  Failed to check allowance for ${spender}: ${error.message}`);
+        }
+      }
+
+      this.stats.activeApprovals = this.watchList.size;
+      console.log(`   ✅ Found ${this.watchList.size} active approvals on-chain`);
+
+      if (this.watchList.size > 0) {
+        console.log(`\n   ⚠️  ACTIVE APPROVALS DETECTED:`);
+        for (const [address, details] of this.watchList.entries()) {
+          console.log(`      ${address}: ${details.amountFormatted} USDT`);
+        }
+        console.log(`   👁️  These addresses are now being monitored for ANY activity!`);
+      }
+    } catch (error) {
+      console.error(`   ⚠️  On-chain allowance check failed: ${error.message}`);
     }
   }
 

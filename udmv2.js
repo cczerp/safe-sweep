@@ -290,6 +290,31 @@ class UltimateDefenseMonitorV2 {
         const tx = await this.provider.getTransaction(txHash);
         if (!tx) return;
 
+        // PROACTIVE DEFENSE: Check if tx is FROM a watched address (has approval)
+        if (this.approvalTracker && this.approvalTracker.isWatchedAddress(tx.from)) {
+          console.log(`\n🚨 PROACTIVE ALERT: Watched address is transacting!`);
+          console.log(`   Address: ${tx.from}`);
+          console.log(`   TX Hash: ${tx.hash}`);
+          const context = this.approvalTracker.getContext(tx.from);
+          if (context) {
+            console.log(`   Context: ${context}`);
+          }
+          console.log(`   ⚡ Triggering IMMEDIATE SWEEP before they can attack!`);
+
+          // Immediate sweep - don't wait for them to execute transferFrom
+          const proactiveThreat = {
+            type: "PROACTIVE_APPROVED_ADDRESS",
+            asset: "USDT", // Sweep USDT since they have approval
+            attackerTx: tx,
+            txHash: tx.hash,
+            isKnownApproved: true,
+            approvalContext: context,
+          };
+
+          await this.respondToThreat(proactiveThreat);
+          return; // Don't process further
+        }
+
         const safeAddr = this.config.safeAddress.toLowerCase();
 
         // ULTRA VERBOSE: Log EVERY transaction involving Safe address (even indirectly)
