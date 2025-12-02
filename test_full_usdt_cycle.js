@@ -494,7 +494,7 @@ async function broadcastWithFallback(tx, primaryProvider, txType) {
   // Try primary RPC first
   try {
     console.log(`   Attempting primary RPC...`);
-    const response = await primaryProvider.broadcastTransaction(signedTx);
+    const response = await primaryProvider.sendTransaction(signedTx);
     const receipt = await response.wait();
     
     console.log(`   ✅ Success on primary RPC!`);
@@ -520,7 +520,7 @@ async function broadcastWithFallback(tx, primaryProvider, txType) {
     try {
       console.log(`   Attempting fallback RPC ${i + 1}/${CONFIG.rpcUrls.length}...`);
       const fallbackProvider = new ethers.providers.JsonRpcProvider(rpcUrl);
-      const response = await fallbackProvider.broadcastTransaction(signedTx);
+      const response = await fallbackProvider.sendTransaction(signedTx);
       const receipt = await response.wait();
       
       console.log(`   ✅ Success on fallback RPC ${i + 1}!`);
