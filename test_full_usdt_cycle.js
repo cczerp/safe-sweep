@@ -463,7 +463,7 @@ async function buildTransferTransaction(
 
   // Estimate gas limit
   const usdtWithSigner = usdtContract.connect(wallet);
-  const gasLimit = await usdtWithSigner.transfer.estimateGas(toAddress, amount);
+  const gasLimit = await usdtWithSigner.estimateGas.transfer(toAddress, amount);
   const gasLimitWithBuffer = gasLimit.mul(120).div(100); // 20% buffer
   console.log(`   Gas Limit: ${gasLimit.toString()} (with 20% buffer: ${gasLimitWithBuffer.toString()})`);
   console.log();
