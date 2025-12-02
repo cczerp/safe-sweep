@@ -105,7 +105,7 @@ async function testFullUSDTCycle() {
     results.initialSafeBalance = initialSafeBalance;
     
     const decimals = await usdtContract.decimals();
-    const initialBalanceFormatted = ethers.formatUnits(initialSafeBalance, decimals);
+    const initialBalanceFormatted = ethers.utils.formatUnits(initialSafeBalance, decimals);
     
     console.log(`   Safe Address: ${CONFIG.safeAddress}`);
     console.log(`   Initial Balance: ${initialBalanceFormatted} USDT`);
@@ -113,7 +113,7 @@ async function testFullUSDTCycle() {
     console.log();
 
     // If no USDT, skip test
-    if (initialSafeBalance === 0n) {
+    if (initialSafeBalance.isZero()) {
       console.log("⚠️  No USDT present in Safe. Test skipped.");
       console.log("=".repeat(70));
       process.exit(0);
@@ -159,31 +159,31 @@ async function testFullUSDTCycle() {
     const vaultBalanceAfterSweep = await usdtContract.balanceOf(CONFIG.vaultAddress);
     
     console.log("📊 Verification after sweep:");
-    console.log(`   Safe Balance: ${ethers.formatUnits(safeBalanceAfterSweep, decimals)} USDT`);
-    console.log(`   Vault Balance: ${ethers.formatUnits(vaultBalanceAfterSweep, decimals)} USDT`);
+    console.log(`   Safe Balance: ${ethers.utils.formatUnits(safeBalanceAfterSweep, decimals)} USDT`);
+    console.log(`   Vault Balance: ${ethers.utils.formatUnits(vaultBalanceAfterSweep, decimals)} USDT`);
     console.log();
 
-    if (safeBalanceAfterSweep !== 0n) {
-      throw new Error(`Sweep verification failed: Safe still has ${ethers.formatUnits(safeBalanceAfterSweep, decimals)} USDT`);
+    if (!safeBalanceAfterSweep.isZero()) {
+      throw new Error(`Sweep verification failed: Safe still has ${ethers.utils.formatUnits(safeBalanceAfterSweep, decimals)} USDT`);
     }
 
     // ========================================================================
     // STEP 2.5: Transfer from Vault to User Wallet
     // ========================================================================
-    let walletBalanceAfterTransfer = 0n;
-    
+    let walletBalanceAfterTransfer = ethers.BigNumber.from(0);
+
     if (CONFIG.vaultAddress.toLowerCase() === CONFIG.userWalletAddress.toLowerCase()) {
       // Vault == Wallet, so balance is already in wallet
       console.log("ℹ️  Vault address matches user wallet - skipping transfer step");
       walletBalanceAfterTransfer = vaultBalanceAfterSweep;
-      console.log(`   Wallet Balance: ${ethers.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
+      console.log(`   Wallet Balance: ${ethers.utils.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
       console.log();
     } else {
       // Vault is separate but controlled by same PRIVATE_KEY
       console.log("🔄 STEP 2.5: Transferring USDT from Vault to User Wallet...");
       console.log(`   From: ${CONFIG.vaultAddress}`);
       console.log(`   To: ${CONFIG.userWalletAddress}`);
-      console.log(`   Amount: ${ethers.formatUnits(vaultBalanceAfterSweep, decimals)} USDT`);
+      console.log(`   Amount: ${ethers.utils.formatUnits(vaultBalanceAfterSweep, decimals)} USDT`);
       console.log(`   Note: Vault is controlled by same wallet (PRIVATE_KEY)`);
       console.log();
 
@@ -213,7 +213,7 @@ async function testFullUSDTCycle() {
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       walletBalanceAfterTransfer = await usdtContract.balanceOf(CONFIG.userWalletAddress);
-      console.log(`   Wallet Balance: ${ethers.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
+      console.log(`   Wallet Balance: ${ethers.utils.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
       console.log();
     }
 
@@ -223,7 +223,7 @@ async function testFullUSDTCycle() {
     console.log("🔄 STEP 3: Returning ALL USDT from User Wallet back to Safe...");
     console.log(`   From: ${CONFIG.userWalletAddress}`);
     console.log(`   To: ${CONFIG.safeAddress}`);
-    console.log(`   Amount: ${ethers.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
+    console.log(`   Amount: ${ethers.utils.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
     console.log();
 
     // Build return transaction
@@ -261,8 +261,8 @@ async function testFullUSDTCycle() {
     results.finalSafeBalance = finalSafeBalance;
 
     console.log("📊 Verification after return:");
-    console.log(`   Safe Balance: ${ethers.formatUnits(finalSafeBalance, decimals)} USDT`);
-    console.log(`   Wallet Balance: ${ethers.formatUnits(finalWalletBalance, decimals)} USDT`);
+    console.log(`   Safe Balance: ${ethers.utils.formatUnits(finalSafeBalance, decimals)} USDT`);
+    console.log(`   Wallet Balance: ${ethers.utils.formatUnits(finalWalletBalance, decimals)} USDT`);
     console.log();
 
     // ========================================================================
@@ -341,7 +341,7 @@ async function initializeProviderAndWallet() {
   
   for (const rpcUrl of CONFIG.rpcUrls) {
     try {
-      provider = new ethers.JsonRpcProvider(rpcUrl);
+      provider = new ethers.providers.JsonRpcProvider(rpcUrl);
       await provider.getBlockNumber(); // Test connection
       console.log(`✅ Connected to RPC: ${rpcUrl.substring(0, 50)}...`);
       break;
@@ -378,21 +378,21 @@ async function buildSweeperTransaction(
   const wallet = new ethers.Wallet(CONFIG.privateKey, provider);
   const nonce = await provider.getTransactionCount(wallet.address, "pending");
   console.log(`   Nonce: ${nonce}`);
-  
+
   // Get fee data
   const feeData = await provider.getFeeData();
   console.log(`   Network Fee Data:`);
-  console.log(`     MaxFeePerGas: ${ethers.formatUnits(feeData.maxFeePerGas || 0n, "gwei")} gwei`);
-  console.log(`     MaxPriorityFeePerGas: ${ethers.formatUnits(feeData.maxPriorityFeePerGas || 0n, "gwei")} gwei`);
-  
+  console.log(`     MaxFeePerGas: ${ethers.utils.formatUnits(feeData.maxFeePerGas || 0, "gwei")} gwei`);
+  console.log(`     MaxPriorityFeePerGas: ${ethers.utils.formatUnits(feeData.maxPriorityFeePerGas || 0, "gwei")} gwei`);
+
   // Apply Polygon gas rules
   const polygonGasConfig = polygonGas.fromProviderFeeData(feeData, { emergency: true });
   console.log(`   Polygon Gas Applied:`);
-  console.log(`     MaxFeePerGas: ${ethers.formatUnits(polygonGasConfig.maxFeePerGas, "gwei")} gwei`);
-  console.log(`     MaxPriorityFeePerGas: ${ethers.formatUnits(polygonGasConfig.maxPriorityFeePerGas, "gwei")} gwei`);
-  
+  console.log(`     MaxFeePerGas: ${ethers.utils.formatUnits(polygonGasConfig.maxFeePerGas, "gwei")} gwei`);
+  console.log(`     MaxPriorityFeePerGas: ${ethers.utils.formatUnits(polygonGasConfig.maxPriorityFeePerGas, "gwei")} gwei`);
+
   // Create sweeper contract interface
-  const sweeperInterface = new ethers.Interface(SWEEPER_ABI);
+  const sweeperInterface = new ethers.utils.Interface(SWEEPER_ABI);
   const data = sweeperInterface.encodeFunctionData("sweepToken", [tokenAddress]);
   
   // Estimate gas limit
@@ -402,7 +402,7 @@ async function buildSweeperTransaction(
     from: wallet.address,
     data: data,
   });
-  const gasLimitWithBuffer = (gasLimit * 120n) / 100n; // 20% buffer
+  const gasLimitWithBuffer = gasLimit.mul(120).div(100); // 20% buffer
   console.log(`   Gas Limit: ${gasLimit.toString()} (with 20% buffer: ${gasLimitWithBuffer.toString()})`);
   console.log();
   
@@ -448,23 +448,23 @@ async function buildTransferTransaction(
   
   const nonce = await provider.getTransactionCount(wallet.address, "pending");
   console.log(`   Nonce: ${nonce}`);
-  
+
   // Get fee data
   const feeData = await provider.getFeeData();
   console.log(`   Network Fee Data:`);
-  console.log(`     MaxFeePerGas: ${ethers.formatUnits(feeData.maxFeePerGas || 0n, "gwei")} gwei`);
-  console.log(`     MaxPriorityFeePerGas: ${ethers.formatUnits(feeData.maxPriorityFeePerGas || 0n, "gwei")} gwei`);
-  
+  console.log(`     MaxFeePerGas: ${ethers.utils.formatUnits(feeData.maxFeePerGas || 0, "gwei")} gwei`);
+  console.log(`     MaxPriorityFeePerGas: ${ethers.utils.formatUnits(feeData.maxPriorityFeePerGas || 0, "gwei")} gwei`);
+
   // Apply Polygon gas rules
   const polygonGasConfig = polygonGas.fromProviderFeeData(feeData, { emergency: true });
   console.log(`   Polygon Gas Applied:`);
-  console.log(`     MaxFeePerGas: ${ethers.formatUnits(polygonGasConfig.maxFeePerGas, "gwei")} gwei`);
-  console.log(`     MaxPriorityFeePerGas: ${ethers.formatUnits(polygonGasConfig.maxPriorityFeePerGas, "gwei")} gwei`);
-  
+  console.log(`     MaxFeePerGas: ${ethers.utils.formatUnits(polygonGasConfig.maxFeePerGas, "gwei")} gwei`);
+  console.log(`     MaxPriorityFeePerGas: ${ethers.utils.formatUnits(polygonGasConfig.maxPriorityFeePerGas, "gwei")} gwei`);
+
   // Estimate gas limit
   const usdtWithSigner = usdtContract.connect(wallet);
   const gasLimit = await usdtWithSigner.transfer.estimateGas(toAddress, amount);
-  const gasLimitWithBuffer = (gasLimit * 120n) / 100n; // 20% buffer
+  const gasLimitWithBuffer = gasLimit.mul(120).div(100); // 20% buffer
   console.log(`   Gas Limit: ${gasLimit.toString()} (with 20% buffer: ${gasLimitWithBuffer.toString()})`);
   console.log();
   
@@ -519,7 +519,7 @@ async function broadcastWithFallback(tx, primaryProvider, txType) {
     
     try {
       console.log(`   Attempting fallback RPC ${i + 1}/${CONFIG.rpcUrls.length}...`);
-      const fallbackProvider = new ethers.JsonRpcProvider(rpcUrl);
+      const fallbackProvider = new ethers.providers.JsonRpcProvider(rpcUrl);
       const response = await fallbackProvider.broadcastTransaction(signedTx);
       const receipt = await response.wait();
       
@@ -547,23 +547,23 @@ function printSummary(results, decimals) {
   console.log("📊 TEST SUMMARY");
   console.log("=".repeat(70));
   console.log();
-  
+
   if (results.initialSafeBalance !== null) {
-    console.log(`Initial Safe Balance: ${ethers.formatUnits(results.initialSafeBalance, decimals)} USDT`);
+    console.log(`Initial Safe Balance: ${ethers.utils.formatUnits(results.initialSafeBalance, decimals)} USDT`);
   }
-  
+
   if (results.sweptAmount !== null) {
-    console.log(`Amount Swept: ${ethers.formatUnits(results.sweptAmount, decimals)} USDT`);
+    console.log(`Amount Swept: ${ethers.utils.formatUnits(results.sweptAmount, decimals)} USDT`);
     console.log(`Sweep Status: ${results.sweepSuccess ? "✅ PASS" : "❌ FAIL"}`);
   }
-  
+
   if (results.returnedAmount !== null) {
-    console.log(`Amount Returned: ${ethers.formatUnits(results.returnedAmount, decimals)} USDT`);
+    console.log(`Amount Returned: ${ethers.utils.formatUnits(results.returnedAmount, decimals)} USDT`);
     console.log(`Return Status: ${results.returnSuccess ? "✅ PASS" : "❌ FAIL"}`);
   }
-  
+
   if (results.finalSafeBalance !== null) {
-    console.log(`Final Safe Balance: ${ethers.formatUnits(results.finalSafeBalance, decimals)} USDT`);
+    console.log(`Final Safe Balance: ${ethers.utils.formatUnits(results.finalSafeBalance, decimals)} USDT`);
   }
   
   console.log();
