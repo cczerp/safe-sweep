@@ -114,7 +114,7 @@ class MarlinRelay {
           "Content-Type": "application/json",
           "X-Flashbots-Signature": signature
         },
-        timeout: 10000
+        timeout: 5000  // Reduced from 10s to 5s for faster fallback
       });
 
       if (response.data.error) {
