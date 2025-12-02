@@ -625,23 +625,44 @@ class UltimateDefenseMonitorV2 {
       const useMEVBundle = this.mevEngine && this.mevEngine.canSubmitBundles();
 
       if (useMEVBundle) {
-        console.log("\n🎯 DEFENSE STRATEGY: MEV BUNDLE (100% guaranteed)");
-        try {
-          response = await this.defendWithMEVBundle(threat);
-          method = "MEV_BUNDLE";
-          this.stats.usedMEVBundles++;
-        } catch (bundleError) {
-          // Check if it's a network error (should fallback to shotgun)
-          if (bundleError.message && bundleError.message.includes("NETWORK_ERROR")) {
-            console.log("\n⚠️ Marlin Relay network error - falling back to shotgun broadcast");
-            console.log("   Error: " + bundleError.message);
-            response = await this.defendWithShotgun(threat);
-            method = response.method || "SHOTGUN_FALLBACK";
+        console.log("\n🎯 DEFENSE STRATEGY: PARALLEL EXECUTION (MEV Bundle + Shotgun)");
+        console.log("   ⚡ Racing both methods - using whichever completes first!");
+
+        // CRITICAL OPTIMIZATION: Run both in parallel, use whichever wins
+        // This dramatically reduces response time from ~18s to ~5s or less
+        const bundlePromise = this.defendWithMEVBundle(threat)
+          .then(result => ({ result, method: "MEV_BUNDLE", source: "bundle" }))
+          .catch(error => ({ error, source: "bundle" }));
+
+        const shotgunPromise = this.defendWithShotgun(threat)
+          .then(result => ({ result, method: result.method || "SHOTGUN", source: "shotgun" }))
+          .catch(error => ({ error, source: "shotgun" }));
+
+        // Race them - fastest wins!
+        const winner = await Promise.race([bundlePromise, shotgunPromise]);
+
+        if (winner.error) {
+          // Winner failed, wait for the other one
+          console.log(`   ⚠️ ${winner.source} failed, waiting for other method...`);
+          const results = await Promise.allSettled([bundlePromise, shotgunPromise]);
+          const successResult = results.find(r => r.status === 'fulfilled' && !r.value.error);
+
+          if (successResult) {
+            response = successResult.value.result;
+            method = successResult.value.method;
+            console.log(`   ✅ Fallback to ${successResult.value.source} succeeded!`);
           } else {
-            // Simulation failed or invalid bundle - stop the sweep
-            console.error("\n❌ Marlin bundle failed - simulation or validation error");
-            console.error("   Error: " + bundleError.message);
-            throw bundleError; // Re-throw to trigger emergency fallback
+            throw new Error("Both MEV bundle and shotgun failed");
+          }
+        } else {
+          response = winner.result;
+          method = winner.method;
+          console.log(`   🏆 ${winner.source} won the race!`);
+
+          if (winner.source === "bundle") {
+            this.stats.usedMEVBundles++;
+          } else {
+            this.stats.usedDynamicGas++;
           }
         }
       } else {
@@ -719,19 +740,18 @@ class UltimateDefenseMonitorV2 {
     }
 
     // Use Polygon-specific emergency gas for bundle tx
-    const feeData = await this.provider.getFeeData();
+    // OPTIMIZATION: Parallelize RPC calls to save 1-2 seconds
+    const [feeData, nonce, gasLimit] = await Promise.all([
+      this.provider.getFeeData(),
+      this.provider.getTransactionCount(this.sweeper.signer.address, "pending"),
+      this.provider.estimateGas({
+        to: txData.to,
+        data: txData.data,
+        from: this.sweeper.signer.address,
+      })
+    ]);
+
     const polygonGas = this.polygonGas.fromProviderFeeData(feeData, { emergency: true });
-
-    const nonce = await this.provider.getTransactionCount(
-      this.sweeper.signer.address,
-      "pending"
-    );
-
-    const gasLimit = await this.provider.estimateGas({
-      to: txData.to,
-      data: txData.data,
-      from: this.sweeper.signer.address,
-    });
 
     const tx = {
       to: txData.to,
@@ -858,8 +878,16 @@ class UltimateDefenseMonitorV2 {
   async buildRealTimeTransaction(txData, attackerTx) {
     console.log("📊 Fetching LIVE gas prices from network...");
 
-    // STEP 1: Get current network gas prices
-    const feeData = await this.provider.getFeeData();
+    // OPTIMIZATION: Parallelize all RPC calls to save 1-2 seconds
+    const [feeData, nonce, gasLimit] = await Promise.all([
+      this.provider.getFeeData(),
+      this.provider.getTransactionCount(this.sweeper.signer.address, "pending"),
+      this.provider.estimateGas({
+        to: txData.to,
+        data: txData.data,
+        from: this.sweeper.signer.address,
+      })
+    ]);
 
     // STEP 2: Use Polygon-specific gas calculation
     // If we have attacker gas, outbid it; otherwise use emergency gas
@@ -881,19 +909,6 @@ class UltimateDefenseMonitorV2 {
       polygonGas = this.polygonGas.fromProviderFeeData(feeData, { emergency: true });
       console.log(`   Using emergency gas: ${this.polygonGas.formatGasInfo(polygonGas)}`);
     }
-
-    // STEP 3: Get fresh nonce
-    const nonce = await this.provider.getTransactionCount(
-      this.sweeper.signer.address,
-      "pending"
-    );
-
-    // STEP 4: Estimate gas limit
-    const gasLimit = await this.provider.estimateGas({
-      to: txData.to,
-      data: txData.data,
-      from: this.sweeper.signer.address,
-    });
 
     // STEP 5: Build transaction with Polygon-appropriate gas prices
     const tx = {
