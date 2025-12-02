@@ -58,6 +58,12 @@ const SWEEPER_ABI = [
   "function sweepToken(address tokenAddress) external",
 ];
 
+const VAULT_ABI = [
+  "function owner() view returns (address)",
+  "function withdrawAllToken(address token) external",
+  "function getTokenBalance(address token) view returns (uint256)",
+];
+
 // ============================================================================
 // MAIN TEST FUNCTION
 // ============================================================================
@@ -168,54 +174,51 @@ async function testFullUSDTCycle() {
     }
 
     // ========================================================================
-    // STEP 2.5: Transfer from Vault to User Wallet
+    // STEP 2.5: Withdraw from Vault to Vault Owner
     // ========================================================================
-    let walletBalanceAfterTransfer = ethers.BigNumber.from(0);
+    console.log("🔄 STEP 2.5: Withdrawing USDT from Vault contract...");
 
-    if (CONFIG.vaultAddress.toLowerCase() === CONFIG.userWalletAddress.toLowerCase()) {
-      // Vault == Wallet, so balance is already in wallet
-      console.log("ℹ️  Vault address matches user wallet - skipping transfer step");
-      walletBalanceAfterTransfer = vaultBalanceAfterSweep;
-      console.log(`   Wallet Balance: ${ethers.utils.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
-      console.log();
-    } else {
-      // Vault is separate but controlled by same PRIVATE_KEY
-      console.log("🔄 STEP 2.5: Transferring USDT from Vault to User Wallet...");
-      console.log(`   From: ${CONFIG.vaultAddress}`);
-      console.log(`   To: ${CONFIG.userWalletAddress}`);
-      console.log(`   Amount: ${ethers.utils.formatUnits(vaultBalanceAfterSweep, decimals)} USDT`);
-      console.log(`   Note: Vault is controlled by same wallet (PRIVATE_KEY)`);
-      console.log();
+    // Initialize vault contract
+    const vaultContract = new ethers.Contract(CONFIG.vaultAddress, VAULT_ABI, wallet);
+    const vaultOwner = await vaultContract.owner();
 
-      // Build transfer from vault to wallet
-      // Since vault is controlled by PRIVATE_KEY, we can sign as vault
-      const vaultToWalletTx = await buildTransferTransaction(
-        usdtContract,
-        CONFIG.vaultAddress,
-        CONFIG.userWalletAddress,
-        vaultBalanceAfterSweep,
-        provider,
-        polygonGas
-      );
+    console.log(`   Vault: ${CONFIG.vaultAddress}`);
+    console.log(`   Vault Owner: ${vaultOwner}`);
+    console.log(`   Amount: ${ethers.utils.formatUnits(vaultBalanceAfterSweep, decimals)} USDT`);
+    console.log();
 
-      // Broadcast with RPC fallback
-      const vaultToWalletResult = await broadcastWithFallback(vaultToWalletTx, provider, "VAULT_TO_WALLET");
-      
-      if (!vaultToWalletResult.success) {
-        throw new Error(`Vault to wallet transfer failed: ${vaultToWalletResult.error}`);
-      }
-
-      console.log(`   ✅ Vault to wallet transfer confirmed!`);
-      console.log(`   TX Hash: ${vaultToWalletResult.txHash}`);
-      console.log();
-
-      // Wait for state update
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      walletBalanceAfterTransfer = await usdtContract.balanceOf(CONFIG.userWalletAddress);
-      console.log(`   Wallet Balance: ${ethers.utils.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
-      console.log();
+    // Verify the wallet can withdraw (must be vault owner)
+    if (wallet.address.toLowerCase() !== vaultOwner.toLowerCase()) {
+      throw new Error(`Cannot withdraw: Wallet ${wallet.address} is not vault owner ${vaultOwner}`);
     }
+
+    // Build vault withdrawal transaction
+    const vaultWithdrawTx = await buildVaultWithdrawalTransaction(
+      vaultContract,
+      CONFIG.usdtAddress,
+      provider,
+      polygonGas
+    );
+
+    // Broadcast with RPC fallback
+    const vaultWithdrawResult = await broadcastWithFallback(vaultWithdrawTx, provider, "VAULT_WITHDRAWAL");
+
+    if (!vaultWithdrawResult.success) {
+      throw new Error(`Vault withdrawal failed: ${vaultWithdrawResult.error}`);
+    }
+
+    console.log(`✅ Vault withdrawal confirmed!`);
+    console.log(`   TX Hash: ${vaultWithdrawResult.txHash}`);
+    console.log(`   Block: ${vaultWithdrawResult.blockNumber}`);
+    console.log();
+
+    // Wait for state update
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Check wallet balance (vault owner receives the tokens)
+    const walletBalanceAfterTransfer = await usdtContract.balanceOf(wallet.address);
+    console.log(`   Wallet Balance: ${ethers.utils.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
+    console.log();
 
     // ========================================================================
     // STEP 3: Return ALL USDT from User Wallet back to Safe
@@ -226,10 +229,10 @@ async function testFullUSDTCycle() {
     console.log(`   Amount: ${ethers.utils.formatUnits(walletBalanceAfterTransfer, decimals)} USDT`);
     console.log();
 
-    // Build return transaction
+    // Build return transaction (from wallet owner back to Safe)
     const returnTx = await buildTransferTransaction(
       usdtContract,
-      CONFIG.userWalletAddress,
+      wallet.address,
       CONFIG.safeAddress,
       walletBalanceAfterTransfer,
       provider,
@@ -418,6 +421,55 @@ async function buildSweeperTransaction(
     type: 2, // EIP-1559
   };
   
+  return tx;
+}
+
+async function buildVaultWithdrawalTransaction(
+  vaultContract,
+  tokenAddress,
+  provider,
+  polygonGas
+) {
+  console.log("🔨 Building vault withdrawal transaction...");
+  console.log(`   Vault: ${vaultContract.address}`);
+  console.log(`   Token: ${tokenAddress}`);
+
+  // Get wallet
+  const wallet = new ethers.Wallet(CONFIG.privateKey, provider);
+  const nonce = await provider.getTransactionCount(wallet.address, "pending");
+  console.log(`   Nonce: ${nonce}`);
+
+  // Get fee data
+  const feeData = await provider.getFeeData();
+  console.log(`   Network Fee Data:`);
+  console.log(`     MaxFeePerGas: ${ethers.utils.formatUnits(feeData.maxFeePerGas || 0, "gwei")} gwei`);
+  console.log(`     MaxPriorityFeePerGas: ${ethers.utils.formatUnits(feeData.maxPriorityFeePerGas || 0, "gwei")} gwei`);
+
+  // Apply Polygon gas rules
+  const polygonGasConfig = polygonGas.fromProviderFeeData(feeData, { emergency: true });
+  console.log(`   Polygon Gas Applied:`);
+  console.log(`     MaxFeePerGas: ${ethers.utils.formatUnits(polygonGasConfig.maxFeePerGas, "gwei")} gwei`);
+  console.log(`     MaxPriorityFeePerGas: ${ethers.utils.formatUnits(polygonGasConfig.maxPriorityFeePerGas, "gwei")} gwei`);
+
+  // Estimate gas limit
+  const vaultWithSigner = vaultContract.connect(wallet);
+  const gasLimit = await vaultWithSigner.estimateGas.withdrawAllToken(tokenAddress);
+  const gasLimitWithBuffer = gasLimit.mul(120).div(100); // 20% buffer
+  console.log(`   Gas Limit: ${gasLimit.toString()} (with 20% buffer: ${gasLimitWithBuffer.toString()})`);
+  console.log();
+
+  // Build transaction
+  const tx = {
+    to: vaultContract.address,
+    data: vaultContract.interface.encodeFunctionData("withdrawAllToken", [tokenAddress]),
+    nonce: nonce,
+    chainId: CONFIG.chainId,
+    gasLimit: gasLimitWithBuffer,
+    maxFeePerGas: polygonGasConfig.maxFeePerGas,
+    maxPriorityFeePerGas: polygonGasConfig.maxPriorityFeePerGas,
+    type: 2, // EIP-1559
+  };
+
   return tx;
 }
 
