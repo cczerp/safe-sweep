@@ -4,6 +4,7 @@ const { DynamicGasBidder } = require("./dynamic_gas_bidder");
 const { MEVBundleEngine } = require("./mev_bundle_engine");
 const { ApprovalTracker } = require("./approval_tracker");
 const { PolygonGasCalculator } = require("./polygon_gas_calculator");
+const { NonceCancellation } = require("./nonce_cancellation");
 require("dotenv").config();
 
 /**
@@ -36,6 +37,7 @@ class UltimateDefenseMonitorV2 {
     this.sweeper = null;
     this.gasBidder = null;
     this.mevEngine = null;
+    this.nonceCancellation = null;
     this.polygonGas = new PolygonGasCalculator({
       minimumGasGwei: config.polygonMinimumGasGwei || 25,
       baseTipGwei: config.polygonBaseTipGwei || 50,
@@ -127,6 +129,11 @@ class UltimateDefenseMonitorV2 {
     console.log("\n🔍 Initializing Approval Intelligence Tracker...");
     this.approvalTracker = new ApprovalTracker(this.config);
     await this.approvalTracker.initialize();
+
+    // Initialize nonce cancellation strategy (BLOCKING DEFENSE)
+    console.log("\n🚫 Initializing Nonce Cancellation Strategy...");
+    this.nonceCancellation = new NonceCancellation(this.config);
+    await this.nonceCancellation.initialize(this.provider, this.config.privateKey);
 
     console.log("\n✅ Ultimate Defense Monitor V2 READY");
     this.printDefenseStrategy();
@@ -287,7 +294,11 @@ class UltimateDefenseMonitorV2 {
           console.log(`🔍 Processed ${pendingTxCount} total pending txs (${relevantTxCount} relevant to Safe)`);
         }
 
-        const tx = await this.provider.getTransaction(txHash);
+        // SPEED OPTIMIZATION: Use Promise with timeout to avoid hanging on slow tx fetches
+        const tx = await Promise.race([
+          this.provider.getTransaction(txHash),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000))
+        ]).catch(() => null);
         if (!tx) return;
 
         // PROACTIVE DEFENSE: Check if tx is FROM a watched address (has approval)
@@ -650,26 +661,35 @@ class UltimateDefenseMonitorV2 {
       const useMEVBundle = this.mevEngine && this.mevEngine.canSubmitBundles();
 
       if (useMEVBundle) {
-        console.log("\n🎯 DEFENSE STRATEGY: PARALLEL EXECUTION (MEV Bundle + Shotgun)");
-        console.log("   ⚡ Racing both methods - using whichever completes first!");
+        console.log("\n🎯 DEFENSE STRATEGY: TRIPLE PARALLEL EXECUTION");
+        console.log("   ⚡ Racing 3 methods simultaneously:");
+        console.log("      1. MEV Bundle (guaranteed ordering)");
+        console.log("      2. Shotgun broadcast (speed)");
+        console.log("      3. Nonce cancellation (blocking)");
 
-        // CRITICAL OPTIMIZATION: Run both in parallel, use whichever wins
-        // This dramatically reduces response time from ~18s to ~5s or less
+        // ADVANCED OPTIMIZATION: Run THREE methods in parallel
+        // 1. MEV Bundle - guaranteed ordering
         const bundlePromise = this.defendWithMEVBundle(threat)
           .then(result => ({ result, method: "MEV_BUNDLE", source: "bundle" }))
           .catch(error => ({ error, source: "bundle" }));
 
+        // 2. Shotgun - fast broadcast
         const shotgunPromise = this.defendWithShotgun(threat)
           .then(result => ({ result, method: result.method || "SHOTGUN", source: "shotgun" }))
           .catch(error => ({ error, source: "shotgun" }));
 
+        // 3. Nonce cancellation - block attacker by using their nonce
+        const cancellationPromise = this.attemptNonceCancellation(threat)
+          .then(result => ({ result, method: "NONCE_CANCEL", source: "cancellation" }))
+          .catch(error => ({ error, source: "cancellation" }));
+
         // Race them - fastest wins!
-        const winner = await Promise.race([bundlePromise, shotgunPromise]);
+        const winner = await Promise.race([bundlePromise, shotgunPromise, cancellationPromise]);
 
         if (winner.error) {
-          // Winner failed, wait for the other one
-          console.log(`   ⚠️ ${winner.source} failed, waiting for other method...`);
-          const results = await Promise.allSettled([bundlePromise, shotgunPromise]);
+          // Winner failed, wait for the other methods
+          console.log(`   ⚠️ ${winner.source} failed, waiting for other methods...`);
+          const results = await Promise.allSettled([bundlePromise, shotgunPromise, cancellationPromise]);
           const successResult = results.find(r => r.status === 'fulfilled' && !r.value.error);
 
           if (successResult) {
@@ -677,7 +697,7 @@ class UltimateDefenseMonitorV2 {
             method = successResult.value.method;
             console.log(`   ✅ Fallback to ${successResult.value.source} succeeded!`);
           } else {
-            throw new Error("Both MEV bundle and shotgun failed");
+            throw new Error("All defense methods failed");
           }
         } else {
           response = winner.result;
@@ -728,6 +748,45 @@ class UltimateDefenseMonitorV2 {
       } catch (fallbackError) {
         console.error("❌ Emergency fallback failed:", fallbackError.message);
       }
+    }
+  }
+
+  /**
+   * Attempt to cancel attacker's transaction using nonce competition
+   * Send a high-gas tx to block/delay attacker, buying time for sweep
+   */
+  async attemptNonceCancellation(threat) {
+    if (!this.nonceCancellation) {
+      throw new Error("Nonce cancellation not initialized");
+    }
+
+    console.log("🚫 Attempting nonce cancellation strategy...");
+    
+    try {
+      // Get attacker's gas to outbid
+      const attackerGas = this.gasBidder.parseGasFromTx(threat.attackerTx);
+      
+      // Get our current nonce
+      const ourNonce = await this.provider.getTransactionCount(this.sweeper.signer.address, "pending");
+      
+      // Send cancellation tx with very high gas
+      const cancelResult = await this.nonceCancellation.sendCancellationTx(ourNonce, attackerGas);
+      
+      console.log("✅ Cancellation tx sent - this may block/delay attacker");
+      console.log("   Now executing actual sweep...");
+      
+      // Immediately follow with actual sweep (next nonce)
+      const sweepResult = await this.defendWithShotgun(threat);
+      
+      return {
+        cancellation: cancelResult,
+        sweep: sweepResult,
+        method: "NONCE_CANCEL+SWEEP"
+      };
+    } catch (error) {
+      console.error(`❌ Nonce cancellation failed: ${error.message}`);
+      // If cancellation fails, try sweep anyway
+      return await this.defendWithShotgun(threat);
     }
   }
 
@@ -920,10 +979,10 @@ class UltimateDefenseMonitorV2 {
     if (attackerTx && this.gasBidder) {
       const attackerGas = this.gasBidder.parseGasFromTx(attackerTx);
       if (attackerGas) {
-        // Outbid attacker using Polygon rules
-        polygonGas = this.polygonGas.outbidGas(attackerGas, 50); // 50% premium
+        // Outbid attacker using Polygon rules with AGGRESSIVE premium
+        polygonGas = this.polygonGas.outbidGas(attackerGas, 150); // 150% premium (2.5x attacker's gas)
         console.log(`   Attacker gas: ${this.polygonGas.formatGasInfo(attackerGas)}`);
-        console.log(`   Our outbid gas: ${this.polygonGas.formatGasInfo(polygonGas)}`);
+        console.log(`   Our outbid gas: ${this.polygonGas.formatGasInfo(polygonGas)} (2.5x attacker)`);
       } else {
         // Fallback to emergency gas
         polygonGas = this.polygonGas.fromProviderFeeData(feeData, { emergency: true });
@@ -1125,8 +1184,8 @@ if (require.main === module) {
     dryRun: process.env.DRY_RUN === "true",
     debug: process.env.DEBUG === "true",
     verbose: process.env.VERBOSE === "true",
-    emergencyGasMult: parseFloat(process.env.EMERGENCY_GAS_MULTIPLIER) || 10.0, // Increased from 3.5 to 10
-    gasPremium: parseFloat(process.env.GAS_PREMIUM) || 0.5,
+    emergencyGasMult: parseFloat(process.env.EMERGENCY_GAS_MULTIPLIER) || 15.0, // Increased for maximum speed
+    gasPremium: parseFloat(process.env.GAS_PREMIUM) || 1.5, // Increased for aggressive outbidding
     poolSize: parseInt(process.env.POOL_SIZE) || 5,
     gasRefreshInterval: parseInt(process.env.GAS_REFRESH_INTERVAL) || 12000,
     sweepMatic: process.env.SWEEP_MATIC === "true", // Disabled by default to save gas

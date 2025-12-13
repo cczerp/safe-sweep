@@ -201,10 +201,9 @@ class UltraFastSweeper {
           });
         broadcastPromises.push(primaryPromise);
 
-        // Path 2+: All backup RPCs
-        for (let i = 0; i < this.backupProviders.length; i++) {
-          const provider = this.backupProviders[i];
-          const backupPromise = provider
+        // Path 2+: All backup RPCs (optimized with map for parallel execution)
+        const backupPromises = this.backupProviders.map((provider, i) => 
+          provider
             .sendTransaction(signedTx)
             .then((result) => {
               console.log(`   ✅ Backup RPC ${i + 1} SUCCESS (${Date.now() - startTime}ms)`);
@@ -216,9 +215,9 @@ class UltraFastSweeper {
                 console.log(`      Error details: ${err.error.message}`);
               }
               return null;
-            });
-          broadcastPromises.push(backupPromise);
-        }
+            })
+        );
+        broadcastPromises.push(...backupPromises);
 
         // Wait for all to complete, return first success
         const results = await Promise.all(broadcastPromises);
