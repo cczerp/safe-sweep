@@ -3,15 +3,15 @@ const { ethers } = require("ethers");
 /**
  * Nonce Cancellation Strategy
  * 
- * When we detect an attack, we can send a transaction with the SAME nonce
- * as the attacker but with higher gas. This creates a "race" where:
- * 1. If our tx wins: Attacker's tx is cancelled (nonce already used)
- * 2. This can buy us time to execute the actual sweep
+ * When we detect an attack, we send a high-gas transaction with OUR NEXT nonce
+ * to create congestion and delay. This strategy:
+ * 1. Sends a high-gas "dummy" tx (0 value to vault/self)
+ * 2. This consumes a nonce slot with maximum priority
+ * 3. Creates mempool congestion and delays attacker
+ * 4. Buys time for our actual sweep to execute
  * 
- * Strategy:
- * - Send a high-gas "dummy" tx (just send 0 ETH to ourselves) with same nonce
- * - Then immediately send the actual sweep with next nonce
- * - The dummy tx blocks/delays the attacker
+ * Note: We use OUR nonce, not the attacker's. The goal is to fill the mempool
+ * with high-priority transactions to create congestion and delay.
  */
 class NonceCancellation {
   constructor(config) {
@@ -19,8 +19,15 @@ class NonceCancellation {
     this.provider = null;
     this.signer = null;
     
+    // Configurable gas settings for cancellation
+    this.cancellationGasMultiplier = config.cancellationGasMultiplier || 3; // 3x attacker's gas
+    this.emergencyTipGwei = config.nonceCancellationTip || 500; // 500 gwei default
+    this.emergencyMaxFeeGwei = config.nonceCancellationMaxFee || 1000; // 1000 gwei default
+    
     console.log("🚫 Nonce Cancellation Strategy initialized");
-    console.log("   Strategy: Send competing tx with same nonce to cancel attacker");
+    console.log(`   Gas Multiplier: ${this.cancellationGasMultiplier}x attacker's gas`);
+    console.log(`   Emergency Tip: ${this.emergencyTipGwei} gwei`);
+    console.log(`   Emergency Max Fee: ${this.emergencyMaxFeeGwei} gwei`);
   }
 
   async initialize(provider, privateKey) {
@@ -48,32 +55,30 @@ class NonceCancellation {
       // Calculate competitive gas - either outbid attacker or use emergency gas
       let gasParams;
       if (attackerGas && attackerGas.maxFeePerGas) {
-        // Outbid attacker by 200% for guaranteed priority
-        const multiplier = 3; // 3x attacker's gas
+        // Outbid attacker by configured multiplier
         gasParams = {
-          maxFeePerGas: attackerGas.maxFeePerGas.mul(multiplier),
-          maxPriorityFeePerGas: attackerGas.maxPriorityFeePerGas.mul(multiplier),
+          maxFeePerGas: attackerGas.maxFeePerGas.mul(this.cancellationGasMultiplier),
+          maxPriorityFeePerGas: attackerGas.maxPriorityFeePerGas.mul(this.cancellationGasMultiplier),
           type: 2,
         };
-        console.log(`   Outbidding attacker by ${multiplier}x`);
+        console.log(`   Outbidding attacker by ${this.cancellationGasMultiplier}x`);
       } else if (attackerGas && attackerGas.gasPrice) {
         // Legacy gas
-        const multiplier = 3;
         gasParams = {
-          gasPrice: attackerGas.gasPrice.mul(multiplier),
+          gasPrice: attackerGas.gasPrice.mul(this.cancellationGasMultiplier),
           type: 0,
         };
-        console.log(`   Outbidding attacker by ${multiplier}x (legacy)`);
+        console.log(`   Outbidding attacker by ${this.cancellationGasMultiplier}x (legacy)`);
       } else {
-        // Use very high emergency gas
-        const emergencyTip = ethers.utils.parseUnits("500", "gwei"); // Very high tip
-        const emergencyMaxFee = ethers.utils.parseUnits("1000", "gwei");
+        // Use configured emergency gas
+        const emergencyTip = ethers.utils.parseUnits(this.emergencyTipGwei.toString(), "gwei");
+        const emergencyMaxFee = ethers.utils.parseUnits(this.emergencyMaxFeeGwei.toString(), "gwei");
         gasParams = {
           maxFeePerGas: emergencyMaxFee,
           maxPriorityFeePerGas: emergencyTip,
           type: 2,
         };
-        console.log(`   Using emergency gas (500 gwei tip)`);
+        console.log(`   Using emergency gas (${this.emergencyTipGwei} gwei tip)`);
       }
 
       // Create a dummy transaction (send 0 to ourselves or to our vault)

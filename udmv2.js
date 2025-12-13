@@ -659,55 +659,96 @@ class UltimateDefenseMonitorV2 {
 
       // STRATEGY DECISION: MEV Bundle vs Shotgun
       const useMEVBundle = this.mevEngine && this.mevEngine.canSubmitBundles();
+      const useNonceCancellation = this.config.enableNonceCancellation !== false;
 
       if (useMEVBundle) {
-        console.log("\n🎯 DEFENSE STRATEGY: TRIPLE PARALLEL EXECUTION");
-        console.log("   ⚡ Racing 3 methods simultaneously:");
-        console.log("      1. MEV Bundle (guaranteed ordering)");
-        console.log("      2. Shotgun broadcast (speed)");
-        console.log("      3. Nonce cancellation (blocking)");
+        if (useNonceCancellation) {
+          console.log("\n🎯 DEFENSE STRATEGY: TRIPLE PARALLEL EXECUTION");
+          console.log("   ⚡ Racing 3 methods simultaneously:");
+          console.log("      1. MEV Bundle (guaranteed ordering)");
+          console.log("      2. Shotgun broadcast (speed)");
+          console.log("      3. Nonce cancellation (blocking)");
 
-        // ADVANCED OPTIMIZATION: Run THREE methods in parallel
-        // 1. MEV Bundle - guaranteed ordering
-        const bundlePromise = this.defendWithMEVBundle(threat)
-          .then(result => ({ result, method: "MEV_BUNDLE", source: "bundle" }))
-          .catch(error => ({ error, source: "bundle" }));
+          // ADVANCED OPTIMIZATION: Run THREE methods in parallel
+          // 1. MEV Bundle - guaranteed ordering
+          const bundlePromise = this.defendWithMEVBundle(threat)
+            .then(result => ({ result, method: "MEV_BUNDLE", source: "bundle" }))
+            .catch(error => ({ error, source: "bundle" }));
 
-        // 2. Shotgun - fast broadcast
-        const shotgunPromise = this.defendWithShotgun(threat)
-          .then(result => ({ result, method: result.method || "SHOTGUN", source: "shotgun" }))
-          .catch(error => ({ error, source: "shotgun" }));
+          // 2. Shotgun - fast broadcast
+          const shotgunPromise = this.defendWithShotgun(threat)
+            .then(result => ({ result, method: result.method || "SHOTGUN", source: "shotgun" }))
+            .catch(error => ({ error, source: "shotgun" }));
 
-        // 3. Nonce cancellation - block attacker by using their nonce
-        const cancellationPromise = this.attemptNonceCancellation(threat)
-          .then(result => ({ result, method: "NONCE_CANCEL", source: "cancellation" }))
-          .catch(error => ({ error, source: "cancellation" }));
+          // 3. Nonce cancellation - block attacker by creating congestion
+          const cancellationPromise = this.attemptNonceCancellation(threat)
+            .then(result => ({ result, method: "NONCE_CANCEL", source: "cancellation" }))
+            .catch(error => ({ error, source: "cancellation" }));
 
-        // Race them - fastest wins!
-        const winner = await Promise.race([bundlePromise, shotgunPromise, cancellationPromise]);
+          // Race them - fastest wins!
+          const winner = await Promise.race([bundlePromise, shotgunPromise, cancellationPromise]);
 
-        if (winner.error) {
-          // Winner failed, wait for the other methods
-          console.log(`   ⚠️ ${winner.source} failed, waiting for other methods...`);
-          const results = await Promise.allSettled([bundlePromise, shotgunPromise, cancellationPromise]);
-          const successResult = results.find(r => r.status === 'fulfilled' && !r.value.error);
+          if (winner.error) {
+            // Winner failed, wait for the other methods
+            console.log(`   ⚠️ ${winner.source} failed, waiting for other methods...`);
+            const results = await Promise.allSettled([bundlePromise, shotgunPromise, cancellationPromise]);
+            const successResult = results.find(r => r.status === 'fulfilled' && !r.value.error);
 
-          if (successResult) {
-            response = successResult.value.result;
-            method = successResult.value.method;
-            console.log(`   ✅ Fallback to ${successResult.value.source} succeeded!`);
+            if (successResult) {
+              response = successResult.value.result;
+              method = successResult.value.method;
+              console.log(`   ✅ Fallback to ${successResult.value.source} succeeded!`);
+            } else {
+              throw new Error("All defense methods failed");
+            }
           } else {
-            throw new Error("All defense methods failed");
+            response = winner.result;
+            method = winner.method;
+            console.log(`   🏆 ${winner.source} won the race!`);
+
+            if (winner.source === "bundle") {
+              this.stats.usedMEVBundles++;
+            } else {
+              this.stats.usedDynamicGas++;
+            }
           }
         } else {
-          response = winner.result;
-          method = winner.method;
-          console.log(`   🏆 ${winner.source} won the race!`);
+          // Dual parallel: MEV Bundle + Shotgun only
+          console.log("\n🎯 DEFENSE STRATEGY: DUAL PARALLEL EXECUTION (MEV Bundle + Shotgun)");
+          console.log("   ⚡ Racing both methods - using whichever completes first!");
 
-          if (winner.source === "bundle") {
-            this.stats.usedMEVBundles++;
+          const bundlePromise = this.defendWithMEVBundle(threat)
+            .then(result => ({ result, method: "MEV_BUNDLE", source: "bundle" }))
+            .catch(error => ({ error, source: "bundle" }));
+
+          const shotgunPromise = this.defendWithShotgun(threat)
+            .then(result => ({ result, method: result.method || "SHOTGUN", source: "shotgun" }))
+            .catch(error => ({ error, source: "shotgun" }));
+
+          const winner = await Promise.race([bundlePromise, shotgunPromise]);
+
+          if (winner.error) {
+            console.log(`   ⚠️ ${winner.source} failed, waiting for other method...`);
+            const results = await Promise.allSettled([bundlePromise, shotgunPromise]);
+            const successResult = results.find(r => r.status === 'fulfilled' && !r.value.error);
+
+            if (successResult) {
+              response = successResult.value.result;
+              method = successResult.value.method;
+              console.log(`   ✅ Fallback to ${successResult.value.source} succeeded!`);
+            } else {
+              throw new Error("Both MEV bundle and shotgun failed");
+            }
           } else {
-            this.stats.usedDynamicGas++;
+            response = winner.result;
+            method = winner.method;
+            console.log(`   🏆 ${winner.source} won the race!`);
+
+            if (winner.source === "bundle") {
+              this.stats.usedMEVBundles++;
+            } else {
+              this.stats.usedDynamicGas++;
+            }
           }
         }
       } else {
@@ -754,6 +795,8 @@ class UltimateDefenseMonitorV2 {
   /**
    * Attempt to cancel attacker's transaction using nonce competition
    * Send a high-gas tx to block/delay attacker, buying time for sweep
+   * 
+   * Note: This sends a dummy tx first, then the sweep with the NEXT nonce
    */
   async attemptNonceCancellation(threat) {
     if (!this.nonceCancellation) {
@@ -766,16 +809,19 @@ class UltimateDefenseMonitorV2 {
       // Get attacker's gas to outbid
       const attackerGas = this.gasBidder.parseGasFromTx(threat.attackerTx);
       
-      // Get our current nonce
+      // Get our current nonce ONCE to avoid race condition
       const ourNonce = await this.provider.getTransactionCount(this.sweeper.signer.address, "pending");
+      
+      console.log(`   Using nonce ${ourNonce} for cancellation, ${ourNonce + 1} for sweep`);
       
       // Send cancellation tx with very high gas
       const cancelResult = await this.nonceCancellation.sendCancellationTx(ourNonce, attackerGas);
       
       console.log("✅ Cancellation tx sent - this may block/delay attacker");
-      console.log("   Now executing actual sweep...");
+      console.log("   Now executing actual sweep with next nonce...");
       
-      // Immediately follow with actual sweep (next nonce)
+      // Follow with actual sweep using NEXT nonce (ourNonce + 1)
+      // The sweep will automatically use the next nonce since we consumed one
       const sweepResult = await this.defendWithShotgun(threat);
       
       return {
@@ -1190,6 +1236,10 @@ if (require.main === module) {
     gasRefreshInterval: parseInt(process.env.GAS_REFRESH_INTERVAL) || 12000,
     sweepMatic: process.env.SWEEP_MATIC === "true", // Disabled by default to save gas
     enableMEVBundles: process.env.ENABLE_MEV_BUNDLES === "true", // Disable by default for Polygon
+    enableNonceCancellation: process.env.ENABLE_NONCE_CANCELLATION !== "false", // Enable by default
+    cancellationGasMultiplier: parseFloat(process.env.CANCELLATION_GAS_MULTIPLIER) || 3,
+    nonceCancellationTip: parseInt(process.env.NONCE_CANCELLATION_TIP) || 500,
+    nonceCancellationMaxFee: parseInt(process.env.NONCE_CANCELLATION_MAX_FEE) || 1000,
     bundleTimeout: parseInt(process.env.BUNDLE_TIMEOUT) || 30,
     maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD) || 2, // Marlin default: 2 blocks ahead
     bundlePriorityFee: process.env.BUNDLE_PRIORITY_FEE

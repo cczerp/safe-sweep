@@ -132,19 +132,18 @@ class PreSignedTxPool {
     this.pools.usdt = [];
 
     // OPTIMIZATION: Parallelize initial RPC calls
-    const [txData, gas, gasLimit] = await Promise.all([
-      this.sweeperContract.populateTransaction.sweepToken(usdtAddress),
-      this.getEmergencyGas(),
-      // We'll estimate gas after we have txData, so do it in a separate promise
-      (async () => {
-        const data = await this.sweeperContract.populateTransaction.sweepToken(usdtAddress);
-        return this.provider.estimateGas({
-          to: data.to,
-          data: data.data,
-          from: this.signer.address,
-        });
-      })()
+    const txDataPromise = this.sweeperContract.populateTransaction.sweepToken(usdtAddress);
+    const [txData, gas] = await Promise.all([
+      txDataPromise,
+      this.getEmergencyGas()
     ]);
+
+    // Estimate gas limit using the txData we just fetched
+    const gasLimit = await this.provider.estimateGas({
+      to: txData.to,
+      data: txData.data,
+      from: this.signer.address,
+    });
 
     // Generate pool with sequential nonces (signing must be sequential)
     const signingPromises = [];
