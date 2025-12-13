@@ -81,6 +81,16 @@ class UltimateDefenseMonitorV2 {
     console.log(`  - Debug Mode: ${this.config.debug ? "✅ ENABLED" : "❌ Disabled"}`);
     console.log(`  - Verbose Mode: ${this.config.verbose ? "✅ ENABLED (will log ALL Safe txs)" : "❌ Disabled"}`);
 
+    // Validate gas multipliers to prevent excessive costs
+    if (this.config.emergencyGasMult > 20) {
+      console.warn(`⚠️  WARNING: Emergency gas multiplier (${this.config.emergencyGasMult}x) is very high!`);
+      console.warn(`   This could lead to excessive gas costs. Consider setting MAX_GAS_PRICE_GWEI.`);
+    }
+    if (this.config.gasPremium > 3) {
+      console.warn(`⚠️  WARNING: Gas premium (${this.config.gasPremium * 100}%) is very high!`);
+      console.warn(`   This could lead to excessive gas costs.`);
+    }
+
     // Setup providers
     console.log("\n📡 Connecting to network...");
     this.provider = new ethers.providers.JsonRpcProvider(this.config.rpcUrl);
@@ -295,9 +305,12 @@ class UltimateDefenseMonitorV2 {
         }
 
         // SPEED OPTIMIZATION: Use Promise with timeout to avoid hanging on slow tx fetches
+        let timeoutId;
         const tx = await Promise.race([
-          this.provider.getTransaction(txHash),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000))
+          this.provider.getTransaction(txHash).finally(() => clearTimeout(timeoutId)),
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Timeout')), 2000);
+          })
         ]).catch(() => null);
         if (!tx) return;
 

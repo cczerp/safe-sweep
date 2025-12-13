@@ -55,20 +55,27 @@ class NonceCancellation {
       // Calculate competitive gas - either outbid attacker or use emergency gas
       let gasParams;
       if (attackerGas && attackerGas.maxFeePerGas) {
-        // Outbid attacker by configured multiplier
+        // Outbid attacker by configured multiplier with overflow protection
+        const maxSafeGas = ethers.utils.parseUnits("10000", "gwei"); // 10k gwei cap
+        const multipliedMaxFee = attackerGas.maxFeePerGas.mul(this.cancellationGasMultiplier);
+        const multipliedTip = attackerGas.maxPriorityFeePerGas.mul(this.cancellationGasMultiplier);
+        
         gasParams = {
-          maxFeePerGas: attackerGas.maxFeePerGas.mul(this.cancellationGasMultiplier),
-          maxPriorityFeePerGas: attackerGas.maxPriorityFeePerGas.mul(this.cancellationGasMultiplier),
+          maxFeePerGas: multipliedMaxFee.gt(maxSafeGas) ? maxSafeGas : multipliedMaxFee,
+          maxPriorityFeePerGas: multipliedTip.gt(maxSafeGas) ? maxSafeGas : multipliedTip,
           type: 2,
         };
-        console.log(`   Outbidding attacker by ${this.cancellationGasMultiplier}x`);
+        console.log(`   Outbidding attacker by ${this.cancellationGasMultiplier}x (capped at 10k gwei)`);
       } else if (attackerGas && attackerGas.gasPrice) {
-        // Legacy gas
+        // Legacy gas with overflow protection
+        const maxSafeGas = ethers.utils.parseUnits("10000", "gwei");
+        const multipliedGas = attackerGas.gasPrice.mul(this.cancellationGasMultiplier);
+        
         gasParams = {
-          gasPrice: attackerGas.gasPrice.mul(this.cancellationGasMultiplier),
+          gasPrice: multipliedGas.gt(maxSafeGas) ? maxSafeGas : multipliedGas,
           type: 0,
         };
-        console.log(`   Outbidding attacker by ${this.cancellationGasMultiplier}x (legacy)`);
+        console.log(`   Outbidding attacker by ${this.cancellationGasMultiplier}x (legacy, capped at 10k gwei)`);
       } else {
         // Use configured emergency gas
         const emergencyTip = ethers.utils.parseUnits(this.emergencyTipGwei.toString(), "gwei");
@@ -127,17 +134,20 @@ class NonceCancellation {
     console.log(`\n🔄 REPLACEMENT TX: Replacing tx with nonce ${originalTx.nonce}`);
 
     try {
-      // Build replacement with higher gas
+      // Build replacement with higher gas using proper BigNumber arithmetic
       let gasParams;
       if (originalTx.maxFeePerGas) {
+        // For 1.5x multiplier, use mul(15).div(10) for precise calculation
+        const multiplierNum = Math.floor(gasMultiplier * 10);
         gasParams = {
-          maxFeePerGas: originalTx.maxFeePerGas.mul(Math.floor(gasMultiplier * 100)).div(100),
-          maxPriorityFeePerGas: originalTx.maxPriorityFeePerGas.mul(Math.floor(gasMultiplier * 100)).div(100),
+          maxFeePerGas: originalTx.maxFeePerGas.mul(multiplierNum).div(10),
+          maxPriorityFeePerGas: originalTx.maxPriorityFeePerGas.mul(multiplierNum).div(10),
           type: 2,
         };
       } else {
+        const multiplierNum = Math.floor(gasMultiplier * 10);
         gasParams = {
-          gasPrice: originalTx.gasPrice.mul(Math.floor(gasMultiplier * 100)).div(100),
+          gasPrice: originalTx.gasPrice.mul(multiplierNum).div(10),
           type: 0,
         };
       }

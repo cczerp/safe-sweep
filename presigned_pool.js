@@ -145,8 +145,8 @@ class PreSignedTxPool {
       from: this.signer.address,
     });
 
-    // Generate pool with sequential nonces (signing must be sequential)
-    const signingPromises = [];
+    // Generate pool with sequential nonces
+    // Note: Signing must be sequential to maintain nonce order
     for (let i = 0; i < this.poolSize; i++) {
       const nonce = this.baseNonce + i;
 
