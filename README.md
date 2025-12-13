@@ -10,6 +10,55 @@ This is a **honeypot defense system** that:
 3. Front-runs attackers by sweeping your tokens to a vault **faster than their transaction**
 4. Uses multiple speed optimizations to **guarantee you win the race**
 
+## 🛡️ NEW: SafetyTimerModule - The Holy Grail
+
+**Your ultimate protection layer that intercepts EVERY transaction before it executes!**
+
+### What Is It?
+
+The **SafetyTimerModule** is a Safe Guard that sits between all transactions and your Safe. It intercepts every transaction attempt and applies intelligent security rules:
+
+1. **Safe Owners & Controllers** → Execute immediately (no delays)
+2. **Unauthorized Transfers** → Queued for 24-hour timelock approval
+3. **Malicious Attempts** → BLOCKED + Auto-sweep tokens to vault
+
+### The "Holy Grail" Feature
+
+**If someone has token approval but isn't authorized:**
+- Transaction is **DROPPED immediately**
+- All tokens **AUTO-SWEPT to vault** in same transaction
+- Address **AUTO-BLACKLISTED** after 3 attempts
+
+This means **even if an attacker has approval**, they can't steal your tokens!
+
+### Quick Start
+
+```bash
+# 1. Deploy SafetyTimer
+node deploy_safety_timer.js
+
+# 2. Enable as module AND guard
+node setup_safety_timer.js
+
+# 3. Configure controllers & protected tokens
+node configure_safety_timer.js
+
+# 4. Start monitoring
+node monitor_safety_timer.js
+```
+
+**See [SAFETY_TIMER_GUIDE.md](./SAFETY_TIMER_GUIDE.md) for complete documentation.**
+
+### Key Features
+
+- ✅ **Guard Implementation** - Intercepts ALL transactions
+- ✅ **Timelock Queue** - 24-hour delay for unauthorized transfers
+- ✅ **Auto-Sweep** - Automatically moves tokens to vault when threats detected
+- ✅ **Blacklisting** - Auto-blacklists malicious addresses
+- ✅ **Emergency Mode** - Can lock down ALL transactions instantly
+- ✅ **Protected Tokens** - Configure which tokens to monitor
+- ✅ **Multiple Controllers** - Designate trusted bot addresses
+
 ## 🚀 Four-Layer Defense System
 
 ### Layer 1: MEV Bundles (100% GUARANTEED ORDERING) 🎯
@@ -51,8 +100,18 @@ This is a **honeypot defense system** that:
 ### Smart Contracts
 - **`DefensiveSweeper.sol`** - Safe module for emergency token sweeping
 - **`SimpleVault.sol`** - Vault contract for storing swept assets
+- **`SafetyTimerModule.sol`** - 🆕 **THE HOLY GRAIL** - Advanced Guard module with timelock protection
 
 ### Helper Scripts
+
+**SafetyTimer Scripts:**
+- **`deploy_safety_timer.js`** - Deploy SafetyTimerModule contract
+- **`setup_safety_timer.js`** - Enable module and set as guard
+- **`configure_safety_timer.js`** - Configure controllers and protected tokens
+- **`monitor_safety_timer.js`** - Real-time monitoring and alerts
+- **`test_safety_timer.js`** - Test SafetyTimer functionality
+
+**Original Defense Scripts:**
 - **`test_setup.js`** - Setup verification script
 - **`test_detection.js`** - Test threat detection logic
 - **`verify_deployment.js`** - Verify contract deployments
@@ -61,6 +120,7 @@ This is a **honeypot defense system** that:
 
 ### Documentation
 - **`.env.example`** - Example environment configuration
+- **`SAFETY_TIMER_GUIDE.md`** - 🆕 **Complete SafetyTimer guide (THE HOLY GRAIL!)**
 - **`DEFENSE_GUIDE.md`** - Complete usage guide
 - **`MEV_BUNDLE_GUIDE.md`** - MEV bundle guide (100% win rate!)
 - **`DEPLOYMENT_GUIDE.md`** - Contract deployment guide
@@ -241,7 +301,11 @@ DEBUG=true                    # Verbose logging
 - [x] **Aggressive gas optimization (15x multiplier)**
 - [x] **Nonce cancellation strategy**
 - [x] **Async parallelization throughout codebase**
-- [ ] Telegram/Discord alerts
+- [x] 🆕 **SafetyTimerModule - Guard with timelock protection (THE HOLY GRAIL!)**
+- [x] 🆕 **Auto-sweep on malicious approval attempts**
+- [x] 🆕 **Transaction queue with approval system**
+- [x] 🆕 **Automatic blacklisting of attackers**
+- [ ] Telegram/Discord alerts (skeleton in monitor_safety_timer.js)
 - [ ] Multi-Safe support
 - [ ] Machine learning gas prediction
 - [ ] Direct validator connections
