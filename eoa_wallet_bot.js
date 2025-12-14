@@ -24,7 +24,7 @@ class EOAWalletBot {
       rpcUrl: config.rpcUrl,
       backupRpcUrls: config.backupRpcUrls || [],
       chainId: config.chainId || 137, // Polygon by default
-      gasPremium: config.gasPremium || 0.5, // 50% premium
+      gasPremium: config.gasPremium || 1.0, // 100% premium (2x attacker's gas)
       maxGasPrice: config.maxGasPrice || ethers.utils.parseUnits("1000", "gwei"),
       monitoringInterval: config.monitoringInterval || 500, // 500ms for txpool scan
       enableTxPoolMonitoring: config.enableTxPoolMonitoring !== false, // Default true

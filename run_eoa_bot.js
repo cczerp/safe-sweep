@@ -34,7 +34,7 @@ const config = {
   chainId: parseInt(process.env.CHAIN_ID || "137"),
 
   // Gas settings (use EOA-specific or fall back to main settings)
-  gasPremium: parseFloat(process.env.EOA_GAS_PREMIUM || process.env.GAS_PREMIUM || "0.5"),
+  gasPremium: parseFloat(process.env.EOA_GAS_PREMIUM || process.env.GAS_PREMIUM || "1.0"),
   maxGasPrice: ethers.utils.parseUnits(
     process.env.EOA_MAX_GAS_PRICE_GWEI || process.env.MAX_GAS_PRICE_GWEI || "1000",
     "gwei"
