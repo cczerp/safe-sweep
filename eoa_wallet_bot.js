@@ -1,6 +1,6 @@
 const { ethers } = require("ethers");
 const TxPoolMonitor = require("./txpool_monitor");
-const DynamicGasBidder = require("./dynamic_gas_bidder");
+const { DynamicGasBidder } = require("./dynamic_gas_bidder");
 const { MarlinRelay } = require("./marlin_relay");
 
 /**
