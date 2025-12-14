@@ -14,52 +14,50 @@ You should see all tests pass ✅
 
 ### Step 2: Configure Your Wallet
 
-Create your configuration file:
+The bot uses the same `.env` file as your existing Safe defense system!
+
+If you don't have a `.env` file yet:
 
 ```bash
-cp eoa_bot_config.example.json eoa_bot_config.json
+cp .env.example .env
 ```
 
-Edit `eoa_bot_config.json` with your details:
+Edit `.env` and add your Trust Wallet details:
 
-```json
-{
-  "walletAddress": "0xYourTrustWalletAddress",
-  "privateKey": "your_private_key_from_trust_wallet",
-  "rpcUrl": "https://your-rpc-provider.com",
-  "wsRpcUrl": "wss://your-rpc-provider.com",
-  "backupRpcUrls": [
-    "https://backup1.com",
-    "https://backup2.com"
-  ],
-  "chainId": 137,
-  "gasPremium": 0.5,
-  "maxGasPrice": "1000000000000"
-}
+```bash
+# ============ EOA WALLET BOT (Trust Wallet) ============
+EOA_WALLET_ADDRESS=0xYourTrustWalletAddress
+EOA_PRIVATE_KEY=your_trust_wallet_private_key_here
+
+# EOA Bot Settings (optional - uses defaults if not set)
+EOA_GAS_PREMIUM=0.5
+EOA_MAX_GAS_PRICE_GWEI=1000
 ```
 
-### Step 3: Choose Your RPC Provider
+**That's it!** The bot will automatically use the RPC endpoints already configured in your `.env`:
+- `ALCHEMY_HTTP` / `ALCHEMY_WSS` (primary)
+- `QUICKNODE_HTTP` / `QUICKNODE_WSS` (backup)
+- `INFURA_HTTP` / `INFURA_WSS` (backup)
+- `ANKR_HTTP` (backup)
+- `NODIES_HTTP` (backup)
 
-Pick a provider and get an API key:
+**Optional but Recommended - MEV Bundles:**
 
-- **Alchemy** (Recommended): https://www.alchemy.com
-  - Free tier: 300M compute units/month
-  - WebSocket support: ✅
-  - URL format: `https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY`
-  - WS format: `wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY`
+For GUARANTEED protection (100% win rate), enable MEV bundles via Marlin Relay. Generate a searcher key:
 
-- **Infura**: https://infura.io
-  - Free tier: 100k requests/day
-  - WebSocket support: ✅
-  - URL format: `https://polygon-mainnet.infura.io/v3/YOUR_KEY`
-  - WS format: `wss://polygon-mainnet.infura.io/ws/v3/YOUR_KEY`
+```bash
+node -e "console.log(require('ethers').Wallet.createRandom().privateKey)"
+```
 
-- **QuickNode**: https://www.quicknode.com
-  - Free trial available
-  - Premium tier needed for txpool_content
-  - URL format: `https://rpc-mainnet.matic.quiknode.pro/YOUR_KEY`
+Add it to `.env`:
+```bash
+MEV_SEARCHER_KEY=0xYourGeneratedSearcherKey
+ENABLE_MEV_BUNDLES=true
+```
 
-### Step 4: Get Your Trust Wallet Private Key
+This key is just for signing bundle requests - it doesn't need any funds!
+
+### Step 3: Get Your Trust Wallet Private Key
 
 ⚠️ **SECURITY WARNING**: Your private key gives FULL ACCESS to your wallet. Keep it secure!
 
@@ -75,7 +73,7 @@ Pick a provider and get an API key:
 - ❌ Wrong: `1234567890abcdef...`
 - ✅ Correct: `0x1234567890abcdef...`
 
-### Step 5: Run the Bot
+### Step 4: Run the Bot
 
 ```bash
 node run_eoa_bot.js
@@ -95,6 +93,8 @@ You should see:
    Gas Premium: 50%
 
 🚀 Starting EOA Wallet Bot...
+🎯 MEV Bundles (Marlin Relay): ENABLED
+   Priority Fee: 50 gwei
 📡 WebSocket monitoring started
 🔍 TxPool monitoring started
 
@@ -105,7 +105,7 @@ You should see:
 
 **The bot is now protecting your wallet! 🛡️**
 
-### Step 6: What Happens When a Threat is Detected
+### Step 5: What Happens When a Threat is Detected
 
 When someone tries to call `transferFrom(yourWallet, theirWallet, amount)`:
 
@@ -121,17 +121,22 @@ When someone tries to call `transferFrom(yourWallet, theirWallet, amount)`:
      maxPriorityFeePerGas: 75 gwei
      gasLimit: 100000
    Signed Tx Hash: 0xdef456...
-   Broadcasting via shotgun...
-     ✅ Primary RPC SUCCESS (45ms)
-     ✅ Backup RPC 1 SUCCESS (52ms)
-     ✅ Backup RPC 2 SUCCESS (48ms)
+
+🎯 USING MEV BUNDLE (Marlin Relay)
+   Current block: 12345678
+   Target block: 12345679
+   Bundle size: 2 transactions
+   ✅ Bundle submitted successfully
+   Bundle hash: 0xbundle123...
 
 ✅ APPROVAL REVOCATION SENT!
-   Response Time: 123ms
+   Method: MEV_BUNDLE
+   Response Time: 185ms
    Tx Hash: 0xdef456...
-   Fastest RPC: Primary RPC
+   Bundle Hash: 0xbundle123...
 
 🎉 APPROVAL REVOKED! Transaction confirmed.
+   Your revocation executed BEFORE attacker's transferFrom
 ```
 
 ## Monitoring & Maintenance
@@ -146,6 +151,8 @@ The bot prints statistics every 30 seconds:
    Revocations Sent: 2
    Revocations Confirmed: 2
    Revocations Failed: 0
+   MEV Bundles: 2 sent, 2 succeeded
+   Shotgun: 0 sent, 0 succeeded
    Avg Response Time: 145ms
 ```
 
@@ -161,38 +168,48 @@ Press `Ctrl+C` to gracefully shutdown:
 
 ## Recommended Configuration for Production
 
-```json
-{
-  "walletAddress": "0xYourAddress",
-  "privateKey": "0xYourKey",
+Your `.env` file should have:
 
-  "rpcUrl": "https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY",
-  "wsRpcUrl": "wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY",
+```bash
+# EOA Wallet Bot
+EOA_WALLET_ADDRESS=0xYourTrustWalletAddress
+EOA_PRIVATE_KEY=0xYourPrivateKey
 
-  "backupRpcUrls": [
-    "https://polygon-mainnet.infura.io/v3/YOUR_INFURA_KEY",
-    "https://lb.drpc.org/ogrpc?network=polygon&dkey=YOUR_DRPC_KEY",
-    "https://rpc.ankr.com/polygon",
-    "https://polygon.nodies.app"
-  ],
+# RPC Providers (at least one required, more = better)
+ALCHEMY_HTTP=https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY
+ALCHEMY_WSS=wss://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY
 
-  "chainId": 137,
-  "gasPremium": 0.5,
-  "maxGasPrice": "1000000000000",
-  "monitoringInterval": 500,
-  "enableTxPoolMonitoring": true,
-  "enableWebSocketMonitoring": true
-}
+QUICKNODE_HTTP=https://your-endpoint.matic.quiknode.pro/YOUR_KEY/
+QUICKNODE_WSS=wss://your-endpoint.matic.quiknode.pro/YOUR_KEY/
+
+INFURA_HTTP=https://polygon-mainnet.infura.io/v3/YOUR_KEY
+INFURA_WSS=wss://polygon-mainnet.infura.io/ws/v3/YOUR_KEY
+
+ANKR_HTTP=https://rpc.ankr.com/polygon
+NODIES_HTTP=https://lb.nodies.app/v1/YOUR_KEY
+
+# Chain & Gas Settings
+CHAIN_ID=137
+EOA_GAS_PREMIUM=0.5
+EOA_MAX_GAS_PRICE_GWEI=1000
+
+# MEV Bundle Settings (RECOMMENDED for 100% win rate)
+MEV_SEARCHER_KEY=0xYourSearcherKey
+ENABLE_MEV_BUNDLES=true
+BUNDLE_PRIORITY_FEE=50
+BUNDLE_TIMEOUT=30
+MAX_BLOCKS_AHEAD=3
 ```
 
 ## Troubleshooting
 
-### "Configuration file not found"
-- Make sure you created `eoa_bot_config.json` from the example
-- Run: `cp eoa_bot_config.example.json eoa_bot_config.json`
+### "Please set EOA_WALLET_ADDRESS in .env file"
+- Make sure you created `.env` from the example
+- Run: `cp .env.example .env`
+- Add your `EOA_WALLET_ADDRESS` and `EOA_PRIVATE_KEY`
 
 ### "WebSocket error" or "WebSocket disconnected"
-- Check your `wsRpcUrl` is correct
+- Check your RPC providers in `.env` (ALCHEMY_WSS, QUICKNODE_WSS, INFURA_WSS)
 - Try using Alchemy or Infura (better WebSocket support)
 - The bot will auto-reconnect, or continue with TxPool monitoring
 

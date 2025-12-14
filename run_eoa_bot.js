@@ -4,48 +4,74 @@
  * EOA Wallet Bot - Deployment Script
  *
  * Quick start:
- * 1. Copy eoa_bot_config.example.json to eoa_bot_config.json
- * 2. Fill in your wallet address, private key, and RPC URLs
+ * 1. Copy .env.example to .env
+ * 2. Fill in EOA_WALLET_ADDRESS and EOA_PRIVATE_KEY
  * 3. Run: node run_eoa_bot.js
  */
 
-const fs = require("fs");
-const path = require("path");
+require("dotenv").config();
+const { ethers } = require("ethers");
 const EOAWalletBot = require("./eoa_wallet_bot");
 
-// Load configuration
-const configPath = path.join(__dirname, "eoa_bot_config.json");
+// Build configuration from .env
+const config = {
+  walletAddress: process.env.EOA_WALLET_ADDRESS,
+  privateKey: process.env.EOA_PRIVATE_KEY,
 
-if (!fs.existsSync(configPath)) {
-  console.error("❌ Configuration file not found!");
-  console.error("   Please copy eoa_bot_config.example.json to eoa_bot_config.json");
-  console.error("   and fill in your wallet details and RPC URLs.");
-  process.exit(1);
-}
+  // Primary RPC (use Alchemy if available, else QuickNode, else Infura)
+  rpcUrl: process.env.ALCHEMY_HTTP || process.env.QUICKNODE_HTTP || process.env.INFURA_HTTP,
+  wsRpcUrl: process.env.ALCHEMY_WSS || process.env.QUICKNODE_WSS || process.env.INFURA_WSS,
 
-let config;
-try {
-  const configData = fs.readFileSync(configPath, "utf8");
-  config = JSON.parse(configData);
-} catch (error) {
-  console.error("❌ Failed to load configuration:", error.message);
-  process.exit(1);
-}
+  // Backup RPCs (all available providers)
+  backupRpcUrls: [
+    process.env.QUICKNODE_HTTP,
+    process.env.INFURA_HTTP,
+    process.env.ANKR_HTTP,
+    process.env.NODIES_HTTP,
+  ].filter(Boolean), // Remove undefined values
+
+  // Chain settings
+  chainId: parseInt(process.env.CHAIN_ID || "137"),
+
+  // Gas settings (use EOA-specific or fall back to main settings)
+  gasPremium: parseFloat(process.env.EOA_GAS_PREMIUM || process.env.GAS_PREMIUM || "0.5"),
+  maxGasPrice: ethers.utils.parseUnits(
+    process.env.EOA_MAX_GAS_PRICE_GWEI || process.env.MAX_GAS_PRICE_GWEI || "1000",
+    "gwei"
+  ),
+
+  // Monitoring settings
+  monitoringInterval: parseInt(process.env.EOA_MONITORING_INTERVAL || "500"),
+  enableTxPoolMonitoring: process.env.EOA_ENABLE_TXPOOL !== "false",
+  enableWebSocketMonitoring: process.env.EOA_ENABLE_WEBSOCKET !== "false",
+
+  // MEV Bundle settings (use same searcher key as main system)
+  enableMEVBundles: process.env.ENABLE_MEV_BUNDLES !== "false",
+  searcherPrivateKey: process.env.MEV_SEARCHER_KEY,
+  bundleTimeout: parseInt(process.env.BUNDLE_TIMEOUT || "30"),
+  maxBlocksAhead: parseInt(process.env.MAX_BLOCKS_AHEAD || "3"),
+  bundlePriorityFee: ethers.utils.parseUnits(
+    process.env.BUNDLE_PRIORITY_FEE || "50",
+    "gwei"
+  ),
+};
 
 // Validate configuration
-if (!config.walletAddress || config.walletAddress === "0xYOUR_TRUST_WALLET_ADDRESS_HERE") {
-  console.error("❌ Please set your wallet address in eoa_bot_config.json");
+if (!config.walletAddress || config.walletAddress === "0xYourTrustWalletAddress") {
+  console.error("❌ Please set EOA_WALLET_ADDRESS in .env file");
   process.exit(1);
 }
 
-if (!config.privateKey || config.privateKey === "YOUR_PRIVATE_KEY_HERE") {
-  console.error("❌ Please set your private key in eoa_bot_config.json");
-  console.error("   ⚠️  WARNING: Keep your private key secure and never commit it to git!");
+if (!config.privateKey || config.privateKey === "your_trust_wallet_private_key_here") {
+  console.error("❌ Please set EOA_PRIVATE_KEY in .env file");
+  console.error("   ⚠️  WARNING: Keep your private key secure and never commit .env to git!");
   process.exit(1);
 }
 
-if (!config.rpcUrl || config.rpcUrl === "https://polygon-rpc.com") {
-  console.error("⚠️  WARNING: Using default RPC URL. Consider using a premium provider.");
+if (!config.rpcUrl) {
+  console.error("❌ No RPC endpoint found in .env file");
+  console.error("   Please set at least one of: ALCHEMY_HTTP, QUICKNODE_HTTP, or INFURA_HTTP");
+  process.exit(1);
 }
 
 // Banner
