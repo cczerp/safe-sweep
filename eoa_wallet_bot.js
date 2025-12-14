@@ -301,8 +301,53 @@ class EOAWalletBot {
       const bundleTxs = [signedRevocationTx];
 
       // Add attacker's tx if we have it
-      if (threat.attackerTx && threat.attackerTx.raw) {
-        bundleTxs.push(threat.attackerTx.raw);
+      if (threat.attackerTx) {
+        try {
+          // Serialize the attacker's transaction to raw bytes
+          let attackerRawTx;
+
+          if (threat.attackerTx.raw) {
+            // Already have raw tx
+            attackerRawTx = threat.attackerTx.raw;
+          } else {
+            // Need to serialize the transaction
+            const tx = threat.attackerTx;
+
+            // Build transaction object for serialization
+            const txData = {
+              nonce: tx.nonce,
+              gasLimit: tx.gasLimit,
+              to: tx.to,
+              value: tx.value || 0,
+              data: tx.data,
+              chainId: tx.chainId,
+            };
+
+            // Add gas fields based on transaction type
+            if (tx.type === 2 || (tx.maxFeePerGas && tx.maxPriorityFeePerGas)) {
+              // EIP-1559
+              txData.type = 2;
+              txData.maxFeePerGas = tx.maxFeePerGas;
+              txData.maxPriorityFeePerGas = tx.maxPriorityFeePerGas;
+            } else if (tx.gasPrice) {
+              // Legacy
+              txData.gasPrice = tx.gasPrice;
+            }
+
+            // Serialize with signature
+            attackerRawTx = ethers.utils.serializeTransaction(txData, {
+              r: tx.r,
+              s: tx.s,
+              v: tx.v,
+            });
+          }
+
+          bundleTxs.push(attackerRawTx);
+          console.log(`   ✅ Attacker's tx serialized and added to bundle`);
+        } catch (error) {
+          console.log(`   ⚠️  Could not serialize attacker's tx: ${error.message}`);
+          console.log(`   Bundle will only contain revocation (less efficient)`);
+        }
       }
 
       console.log(`   Bundle size: ${bundleTxs.length} transactions`);
