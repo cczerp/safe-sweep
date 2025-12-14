@@ -1,3 +1,4 @@
 .env
 .env.*
 node_modules/
+eoa_bot_config.json
