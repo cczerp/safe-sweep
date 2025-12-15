@@ -1,6 +1,7 @@
 const { ethers } = require("ethers");
-const TxPoolMonitor = require("./txpool_monitor");
-const DynamicGasBidder = require("./dynamic_gas_bidder");
+const { TxPoolMonitor } = require("./txpool_monitor");
+const { DynamicGasBidder } = require("./dynamic_gas_bidder");
+const { MarlinRelay } = require("./marlin_relay");
 
 /**
  * EOA Wallet Bot - High-Speed Approval Revocation System
@@ -23,11 +24,17 @@ class EOAWalletBot {
       rpcUrl: config.rpcUrl,
       backupRpcUrls: config.backupRpcUrls || [],
       chainId: config.chainId || 137, // Polygon by default
-      gasPremium: config.gasPremium || 0.5, // 50% premium
+      gasPremium: config.gasPremium || 1.0, // 100% premium (2x attacker's gas)
       maxGasPrice: config.maxGasPrice || ethers.utils.parseUnits("1000", "gwei"),
       monitoringInterval: config.monitoringInterval || 500, // 500ms for txpool scan
       enableTxPoolMonitoring: config.enableTxPoolMonitoring !== false, // Default true
       enableWebSocketMonitoring: config.enableWebSocketMonitoring !== false, // Default true
+      // MEV Bundle settings
+      enableMEVBundles: config.enableMEVBundles !== false, // Default true
+      searcherPrivateKey: config.searcherPrivateKey,
+      bundleTimeout: config.bundleTimeout || 30,
+      maxBlocksAhead: config.maxBlocksAhead || 3,
+      bundlePriorityFee: config.bundlePriorityFee || ethers.utils.parseUnits("50", "gwei"),
       ...config,
     };
 
@@ -60,6 +67,14 @@ class EOAWalletBot {
       });
     }
 
+    // Initialize Marlin Relay for MEV bundles (if enabled)
+    this.marlinRelay = null;
+    this.mevBundlesAvailable = false;
+    if (this.config.enableMEVBundles && this.config.searcherPrivateKey) {
+      this.marlinRelay = new MarlinRelay(this.config);
+      // Will initialize in start() method
+    }
+
     // ERC20 approve function signature: approve(address spender, uint256 amount)
     this.ERC20_ABI = [
       "function approve(address spender, uint256 amount) returns (bool)",
@@ -72,6 +87,10 @@ class EOAWalletBot {
       revocationsSent: 0,
       revocationsConfirmed: 0,
       revocationsFailed: 0,
+      mevBundlesSent: 0,
+      mevBundlesSucceeded: 0,
+      shotgunSent: 0,
+      shotgunSucceeded: 0,
       avgResponseTime: 0,
       startTime: Date.now(),
     };
@@ -104,6 +123,21 @@ class EOAWalletBot {
     }
 
     this.isMonitoring = true;
+
+    // Initialize Marlin Relay for MEV bundles
+    if (this.marlinRelay) {
+      try {
+        await this.marlinRelay.initialize(this.config.searcherPrivateKey);
+        this.mevBundlesAvailable = true;
+        console.log("🎯 MEV Bundles (Marlin Relay): ENABLED");
+        console.log(`   Priority Fee: ${ethers.utils.formatUnits(this.config.bundlePriorityFee, "gwei")} gwei`);
+      } catch (error) {
+        console.error("⚠️  Failed to initialize Marlin Relay:", error.message);
+        console.log("   Continuing with shotgun mode only");
+      }
+    } else {
+      console.log("⚠️  MEV Bundles: DISABLED (using shotgun mode)");
+    }
 
     // Start WebSocket monitoring
     if (this.config.enableWebSocketMonitoring) {
@@ -248,6 +282,101 @@ class EOAWalletBot {
   }
 
   /**
+   * Revoke approval using MEV bundle (guaranteed ordering)
+   * Bundle contains: [our revocation tx, attacker's tx]
+   * Our tx executes FIRST, then attacker's fails
+   */
+  async revokeWithMEVBundle(threat, signedRevocationTx) {
+    console.log(`\n🎯 USING MEV BUNDLE (Marlin Relay)`);
+
+    try {
+      // Get current block
+      const currentBlock = await this.provider.getBlockNumber();
+      const targetBlock = currentBlock + 1;
+
+      console.log(`   Current block: ${currentBlock}`);
+      console.log(`   Target block: ${targetBlock}`);
+
+      // Build bundle: our revocation first, attacker's tx second
+      const bundleTxs = [signedRevocationTx];
+
+      // Add attacker's tx if we have it
+      if (threat.attackerTx) {
+        try {
+          // Serialize the attacker's transaction to raw bytes
+          let attackerRawTx;
+
+          if (threat.attackerTx.raw) {
+            // Already have raw tx
+            attackerRawTx = threat.attackerTx.raw;
+          } else {
+            // Need to serialize the transaction
+            const tx = threat.attackerTx;
+
+            // Build transaction object for serialization
+            const txData = {
+              nonce: tx.nonce,
+              gasLimit: tx.gasLimit,
+              to: tx.to,
+              value: tx.value || 0,
+              data: tx.data,
+              chainId: tx.chainId,
+            };
+
+            // Add gas fields based on transaction type
+            if (tx.type === 2 || (tx.maxFeePerGas && tx.maxPriorityFeePerGas)) {
+              // EIP-1559
+              txData.type = 2;
+              txData.maxFeePerGas = tx.maxFeePerGas;
+              txData.maxPriorityFeePerGas = tx.maxPriorityFeePerGas;
+            } else if (tx.gasPrice) {
+              // Legacy
+              txData.gasPrice = tx.gasPrice;
+            }
+
+            // Serialize with signature
+            attackerRawTx = ethers.utils.serializeTransaction(txData, {
+              r: tx.r,
+              s: tx.s,
+              v: tx.v,
+            });
+          }
+
+          bundleTxs.push(attackerRawTx);
+          console.log(`   ✅ Attacker's tx serialized and added to bundle`);
+        } catch (error) {
+          console.log(`   ⚠️  Could not serialize attacker's tx: ${error.message}`);
+          console.log(`   Bundle will only contain revocation (less efficient)`);
+        }
+      }
+
+      console.log(`   Bundle size: ${bundleTxs.length} transactions`);
+
+      // Submit bundle to Marlin Relay
+      const result = await this.marlinRelay.sendBundle(bundleTxs, targetBlock);
+
+      this.stats.mevBundlesSent++;
+
+      if (result.success) {
+        console.log(`   ✅ Bundle submitted successfully`);
+        console.log(`   Bundle hash: ${result.bundleHash}`);
+        this.stats.mevBundlesSucceeded++;
+        return {
+          success: true,
+          method: "MEV_BUNDLE",
+          bundleHash: result.bundleHash,
+          hash: ethers.utils.keccak256(signedRevocationTx),
+        };
+      } else {
+        throw new Error("Bundle submission failed");
+      }
+    } catch (error) {
+      console.error(`   ❌ MEV bundle failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
    * Revoke approval for the token contract
    * Sends approve(spender, 0) to revoke the approval
    */
@@ -321,10 +450,29 @@ class EOAWalletBot {
       const txHash = ethers.utils.keccak256(signedTx);
 
       console.log(`   Signed Tx Hash: ${txHash}`);
-      console.log(`   Broadcasting via shotgun...`);
 
-      // Shotgun broadcast (send through all RPCs simultaneously)
-      const result = await this.shotgunBroadcast(signedTx);
+      let result;
+      let method;
+
+      // Try MEV bundle first (guaranteed ordering)
+      if (this.mevBundlesAvailable) {
+        try {
+          result = await this.revokeWithMEVBundle(threat, signedTx);
+          method = "MEV_BUNDLE";
+        } catch (error) {
+          console.log(`   ⚠️  MEV bundle failed, falling back to shotgun...`);
+          // Fall through to shotgun
+        }
+      }
+
+      // Fallback to shotgun if MEV bundles disabled or failed
+      if (!result) {
+        console.log(`   Broadcasting via shotgun...`);
+        result = await this.shotgunBroadcast(signedTx);
+        method = "SHOTGUN";
+        this.stats.shotgunSent++;
+        this.stats.shotgunSucceeded++;
+      }
 
       const responseTime = Date.now() - startTime;
       this.stats.revocationsSent++;
@@ -335,9 +483,14 @@ class EOAWalletBot {
         this.stats.revocationsSent;
 
       console.log(`\n✅ APPROVAL REVOCATION SENT!`);
+      console.log(`   Method: ${method}`);
       console.log(`   Response Time: ${responseTime}ms`);
       console.log(`   Tx Hash: ${result.hash}`);
-      console.log(`   Fastest RPC: ${result.source || 'Primary'}`);
+      if (method === "SHOTGUN") {
+        console.log(`   Fastest RPC: ${result.source || 'Primary'}`);
+      } else if (method === "MEV_BUNDLE") {
+        console.log(`   Bundle Hash: ${result.bundleHash}`);
+      }
 
       // Wait for confirmation (async, don't block)
       this.waitForConfirmation(result.hash).then((confirmed) => {
@@ -437,6 +590,10 @@ class EOAWalletBot {
     console.log(`   Revocations Sent: ${this.stats.revocationsSent}`);
     console.log(`   Revocations Confirmed: ${this.stats.revocationsConfirmed}`);
     console.log(`   Revocations Failed: ${this.stats.revocationsFailed}`);
+    if (this.mevBundlesAvailable) {
+      console.log(`   MEV Bundles: ${this.stats.mevBundlesSent} sent, ${this.stats.mevBundlesSucceeded} succeeded`);
+      console.log(`   Shotgun: ${this.stats.shotgunSent} sent, ${this.stats.shotgunSucceeded} succeeded`);
+    }
     console.log(`   Avg Response Time: ${Math.round(this.stats.avgResponseTime)}ms`);
   }
 

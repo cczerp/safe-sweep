@@ -8,9 +8,10 @@ The EOA Wallet Bot is a specialized defense system that protects your EOA (Exter
 
 1. **Mempool Monitoring**: Watches pending transactions via WebSocket and TxPool scanning
 2. **Threat Detection**: Detects `transferFrom(yourWallet, attacker, amount)` calls instantly
-3. **Instant Response**: Sends `approve(attacker, 0)` with premium gas to revoke approval
-4. **Shotgun Broadcasting**: Sends revocation through multiple RPCs simultaneously for speed
-5. **Dynamic Gas Bidding**: Automatically outbids attacker by 50%+ to ensure priority
+3. **Instant Response**: Builds `approve(attacker, 0)` transaction to revoke approval
+4. **MEV Bundle (Primary)**: Submits to Marlin Relay for GUARANTEED ordering (your tx executes before attacker's)
+5. **Shotgun Broadcasting (Fallback)**: If MEV bundles disabled/fail, sends through multiple RPCs with premium gas
+6. **Dynamic Gas Bidding**: Automatically outbids attacker by 50%+ to ensure priority
 
 ## Architecture
 
@@ -24,9 +25,10 @@ EOA Wallet Bot
 ├─ Approval Revoker
 │  ├─ Builds approve(spender, 0) transaction
 │  ├─ Dynamic gas bidding (150% of attacker's gas by default)
-│  └─ Shotgun broadcast through primary + backup RPCs
+│  ├─ MEV Bundle (PRIMARY) - Marlin Relay for guaranteed ordering
+│  └─ Shotgun broadcast (FALLBACK) - through primary + backup RPCs
 └─ Statistics & Monitoring
-   └─ Real-time stats on threats detected and revocations sent
+   └─ Real-time stats on threats, MEV bundles, and shotgun broadcasts
 ```
 
 ## Quick Start
