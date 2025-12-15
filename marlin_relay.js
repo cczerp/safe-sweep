@@ -17,14 +17,22 @@ const crypto = require("crypto");
  * - Format: searcher_key_address:signature
  */
 class MarlinRelay {
-  constructor(config) {
-    this.config = config;
-    this.endpoint = "https://bor.txrelay.marlin.org";
+  constructor(config = {}) {
+    this.config = config || {};
+
+    // Marlin Polygon relay endpoint (Flashbots-compatible)
+    // Docs: https://docs.marlin.org/user-guides/polygon-mev/for-searchers
+    this.endpoint = this.config.marlinEndpoint || "https://bor.txrelay.marlin.org";
+
     this.searcherKey = null;
     this.searcherAddress = null;
+    // Timeout (ms) for bundle submission – driven by bundleTimeout (seconds) in config/env
+    const defaultTimeoutSeconds = 10; // safer default than 5s for public relay
+    this.timeoutMs = (this.config.bundleTimeout || defaultTimeoutSeconds) * 1000;
     
     console.log("🔷 Initializing Marlin Relay Client...");
     console.log(`   Endpoint: ${this.endpoint}`);
+    console.log(`   Bundle timeout: ${this.timeoutMs} ms`);
   }
 
   /**
@@ -88,7 +96,7 @@ class MarlinRelay {
   async sendBundle(transactions, blockNumber) {
     const axios = require("axios");
 
-    // Convert blockNumber to hex if needed
+    // Convert blockNumber to hex if needed (Marlin follows Flashbots-style API)
     const blockNumberHex = typeof blockNumber === "number" 
       ? "0x" + blockNumber.toString(16) 
       : blockNumber;
@@ -114,7 +122,8 @@ class MarlinRelay {
           "Content-Type": "application/json",
           "X-Flashbots-Signature": signature
         },
-        timeout: 5000  // Reduced from 10s to 5s for faster fallback
+        // Use configurable timeout – short enough for fallback, long enough for real networks
+        timeout: this.timeoutMs
       });
 
       if (response.data.error) {
